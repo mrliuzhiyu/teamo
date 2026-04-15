@@ -98,6 +98,9 @@ jobs:
       - name: Regenerate proper .ico / .icns from icon.png
         run: pnpm tauri icon src-tauri/icons/icon.png --output src-tauri/icons
 
+      - name: Build frontend (vite)
+        run: pnpm build
+
       - name: Cargo check
         working-directory: src-tauri
         run: cargo check --target ${{ matrix.rust-target }}
