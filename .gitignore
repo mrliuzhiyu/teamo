@@ -53,3 +53,4 @@ pnpm-debug.log*
 .cache/
 coverage/
 *.tsbuildinfo
+src-tauri/icons/

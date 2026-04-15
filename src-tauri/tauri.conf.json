@@ -1,0 +1,62 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Teamo",
+  "version": "0.0.1",
+  "identifier": "cn.textview.teamo",
+  "build": {
+    "beforeDevCommand": "pnpm dev",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "pnpm build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "Teamo",
+        "width": 480,
+        "height": 640,
+        "minWidth": 360,
+        "minHeight": 480,
+        "resizable": true,
+        "fullscreen": false,
+        "decorations": true,
+        "transparent": false,
+        "alwaysOnTop": false
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "category": "Productivity",
+    "shortDescription": "你的人生记录 Agent",
+    "longDescription": "Teamo 是一款好用的本地智能剪切板工具。它默默运行在系统后台，自动捕获你复制的内容，端侧智能过滤敏感信息（密码 / Token / 银行卡号），把有价值的留下来。可选连接 TextView 云端做 AI 整理。",
+    "copyright": "Copyright (C) 2026 Liu Zhiyu",
+    "publisher": "Liu Zhiyu",
+    "homepage": "https://github.com/mrliuzhiyu/teamo",
+    "license": "AGPL-3.0-or-later",
+    "macOS": {
+      "minimumSystemVersion": "10.15"
+    },
+    "windows": {
+      "wix": {
+        "language": ["zh-CN", "en-US"]
+      }
+    },
+    "linux": {
+      "deb": {
+        "depends": []
+      }
+    }
+  }
+}

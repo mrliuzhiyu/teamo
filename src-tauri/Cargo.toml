@@ -1,0 +1,51 @@
+[package]
+name = "teamo"
+version = "0.0.1"
+description = "你的人生记录 Agent · A clipboard-powered local-first life recording agent"
+authors = ["Liu Zhiyu <54liuzhiyu@gmail.com>"]
+license = "AGPL-3.0-or-later"
+repository = "https://github.com/mrliuzhiyu/teamo"
+edition = "2021"
+rust-version = "1.75"
+
+[lib]
+name = "teamo_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2.0", features = [] }
+
+[dependencies]
+# Tauri 2.x 核心
+tauri = { version = "2.0", features = ["tray-icon"] }
+tauri-plugin-autostart = "2.0"
+tauri-plugin-clipboard-manager = "2.0"
+tauri-plugin-global-shortcut = "2.0"
+tauri-plugin-shell = "2.0"
+tauri-plugin-sql = { version = "2.0", features = ["sqlite"] }
+tauri-plugin-store = "2.0"
+tauri-plugin-updater = "2.0"
+
+# 业务依赖（脚手架阶段引入，后续 issue 卷子里实际使用）
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tokio = { version = "1.40", features = ["full"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# 剪切板监听 + 读写（Phase 1A 业务实现时启用）
+# clipboard-master = "4.0"
+# arboard = "3.4"
+
+# 本地存储 + 安全凭证
+rusqlite = { version = "0.32", features = ["bundled"] }
+keyring = "3.0"
+
+# HTTP（云端通信，Phase 1B 启用）
+reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
+
+[features]
+# 默认启用平台默认特性
+default = ["custom-protocol"]
+# Tauri custom-protocol（生产构建必需）
+custom-protocol = ["tauri/custom-protocol"]
