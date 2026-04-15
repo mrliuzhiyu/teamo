@@ -1,0 +1,373 @@
+# Teamo · 初始域名规则库（v1）
+#
+# 用途：桌面端打包内置一份；登录后从云端 GET /api/rules 拉增量更新合并
+# 三种规则类型：
+#   - parse_as_content : 内容页，云端调 link_cards 解析为卡片
+#   - skip_parse       : 上云但不解析（搜索页/工具页等无解析价值）
+#   - skip_upload      : 端侧拦截不上云（登录页/支付页/纯密码场景）
+#
+# pattern 语法：
+#   - "domain.com"           - 整个域名命中
+#   - "domain.com/path"      - 域名 + 路径前缀
+#   - "domain.com/path/*"    - 通配符
+#   - "*.domain.com"         - 子域名通配
+#
+# priority 大者优先；同 priority 时 skip_upload > skip_parse > parse_as_content
+# version 字段标识规则库版本，桌面端拉新规则用 since=<version> 增量
+
+version: 1
+updated_at: 2026-04-15
+
+rules:
+
+  # ===========================================================================
+  # 国内主流内容平台 → parse_as_content
+  # ===========================================================================
+  - pattern: "douyin.com/video/*"
+    type: parse_as_content
+    priority: 100
+    note: "抖音视频，解析为视频卡片（标题/作者/封面/字幕）"
+
+  - pattern: "v.douyin.com/*"
+    type: parse_as_content
+    priority: 100
+    note: "抖音短链分享"
+
+  - pattern: "iesdouyin.com/*"
+    type: parse_as_content
+    priority: 100
+    note: "抖音备用域名"
+
+  - pattern: "bilibili.com/video/*"
+    type: parse_as_content
+    priority: 100
+    note: "B 站视频"
+
+  - pattern: "b23.tv/*"
+    type: parse_as_content
+    priority: 100
+    note: "B 站短链"
+
+  - pattern: "xiaohongshu.com/explore/*"
+    type: parse_as_content
+    priority: 100
+    note: "小红书笔记"
+
+  - pattern: "xhslink.com/*"
+    type: parse_as_content
+    priority: 100
+    note: "小红书短链"
+
+  - pattern: "zhihu.com/question/*"
+    type: parse_as_content
+    priority: 100
+    note: "知乎问题"
+
+  - pattern: "zhihu.com/p/*"
+    type: parse_as_content
+    priority: 100
+    note: "知乎专栏文章"
+
+  - pattern: "zhuanlan.zhihu.com/p/*"
+    type: parse_as_content
+    priority: 100
+    note: "知乎专栏旧域名"
+
+  - pattern: "weibo.com/*/*"
+    type: parse_as_content
+    priority: 100
+    note: "微博单条"
+
+  - pattern: "m.weibo.cn/*"
+    type: parse_as_content
+    priority: 100
+    note: "微博移动端"
+
+  - pattern: "mp.weixin.qq.com/s/*"
+    type: parse_as_content
+    priority: 100
+    note: "公众号文章"
+
+  - pattern: "mp.weixin.qq.com/s?*"
+    type: parse_as_content
+    priority: 100
+    note: "公众号文章（query 形式）"
+
+  - pattern: "juejin.cn/post/*"
+    type: parse_as_content
+    priority: 100
+    note: "掘金文章"
+
+  - pattern: "csdn.net/article/*"
+    type: parse_as_content
+    priority: 100
+    note: "CSDN 文章"
+
+  - pattern: "*.csdn.net/article/*"
+    type: parse_as_content
+    priority: 100
+    note: "CSDN 子域名文章"
+
+  - pattern: "jianshu.com/p/*"
+    type: parse_as_content
+    priority: 100
+    note: "简书文章"
+
+  # ===========================================================================
+  # 国外主流内容平台 → parse_as_content
+  # ===========================================================================
+  - pattern: "youtube.com/watch"
+    type: parse_as_content
+    priority: 100
+    note: "YouTube 视频"
+
+  - pattern: "youtu.be/*"
+    type: parse_as_content
+    priority: 100
+    note: "YouTube 短链"
+
+  - pattern: "twitter.com/*/status/*"
+    type: parse_as_content
+    priority: 100
+    note: "Twitter 推文"
+
+  - pattern: "x.com/*/status/*"
+    type: parse_as_content
+    priority: 100
+    note: "X 推文（新域名）"
+
+  - pattern: "reddit.com/r/*/comments/*"
+    type: parse_as_content
+    priority: 100
+    note: "Reddit 帖子"
+
+  - pattern: "medium.com/*/*"
+    type: parse_as_content
+    priority: 100
+    note: "Medium 文章"
+
+  - pattern: "*.medium.com/*"
+    type: parse_as_content
+    priority: 100
+    note: "Medium 子域名"
+
+  - pattern: "dev.to/*/*"
+    type: parse_as_content
+    priority: 100
+    note: "dev.to 文章"
+
+  - pattern: "substack.com/p/*"
+    type: parse_as_content
+    priority: 100
+    note: "Substack 文章"
+
+  - pattern: "*.substack.com/p/*"
+    type: parse_as_content
+    priority: 100
+    note: "Substack 子域名"
+
+  - pattern: "news.ycombinator.com/item*"
+    type: parse_as_content
+    priority: 100
+    note: "Hacker News 帖子"
+
+  # ===========================================================================
+  # 代码 / 技术内容 → parse_as_content（特殊处理）
+  # ===========================================================================
+  - pattern: "github.com/*/*/issues/*"
+    type: parse_as_content
+    priority: 90
+    note: "GitHub Issue"
+
+  - pattern: "github.com/*/*/pull/*"
+    type: parse_as_content
+    priority: 90
+    note: "GitHub PR"
+
+  - pattern: "github.com/*/*/blob/*"
+    type: parse_as_content
+    priority: 90
+    note: "GitHub 文件查看"
+
+  - pattern: "stackoverflow.com/questions/*"
+    type: parse_as_content
+    priority: 90
+    note: "StackOverflow 问题"
+
+  # ===========================================================================
+  # 搜索页 → skip_parse（上云但不解析）
+  # ===========================================================================
+  - pattern: "baidu.com/s"
+    type: skip_parse
+    priority: 80
+
+  - pattern: "google.com/search"
+    type: skip_parse
+    priority: 80
+
+  - pattern: "*.google.com/search"
+    type: skip_parse
+    priority: 80
+
+  - pattern: "bing.com/search"
+    type: skip_parse
+    priority: 80
+
+  - pattern: "duckduckgo.com/?*"
+    type: skip_parse
+    priority: 80
+
+  - pattern: "github.com/search"
+    type: skip_parse
+    priority: 80
+
+  - pattern: "*.github.com/search"
+    type: skip_parse
+    priority: 80
+
+  - pattern: "youtube.com/results"
+    type: skip_parse
+    priority: 80
+
+  - pattern: "twitter.com/search"
+    type: skip_parse
+    priority: 80
+
+  - pattern: "x.com/search"
+    type: skip_parse
+    priority: 80
+
+  - pattern: "weibo.com/search/*"
+    type: skip_parse
+    priority: 80
+
+  - pattern: "zhihu.com/search"
+    type: skip_parse
+    priority: 80
+
+  # ===========================================================================
+  # 工具页 → skip_parse
+  # ===========================================================================
+  - pattern: "github.com"
+    type: skip_parse
+    priority: 70
+    note: "GitHub 首页"
+
+  - pattern: "github.com/dashboard"
+    type: skip_parse
+    priority: 80
+
+  - pattern: "github.com/notifications"
+    type: skip_parse
+    priority: 80
+
+  - pattern: "github.com/settings/*"
+    type: skip_parse
+    priority: 80
+
+  # ===========================================================================
+  # 登录 / 注册 / 支付 → skip_upload（不上云）
+  # ===========================================================================
+  - pattern: "*/login"
+    type: skip_upload
+    priority: 200
+    note: "通用登录页 wildcard"
+
+  - pattern: "*/signin"
+    type: skip_upload
+    priority: 200
+
+  - pattern: "*/signup"
+    type: skip_upload
+    priority: 200
+
+  - pattern: "*/register"
+    type: skip_upload
+    priority: 200
+
+  - pattern: "*/auth/*"
+    type: skip_upload
+    priority: 200
+
+  - pattern: "*/oauth/*"
+    type: skip_upload
+    priority: 200
+
+  - pattern: "*/checkout"
+    type: skip_upload
+    priority: 200
+
+  - pattern: "*/payment*"
+    type: skip_upload
+    priority: 200
+
+  - pattern: "accounts.google.com/*"
+    type: skip_upload
+    priority: 200
+
+  - pattern: "passport.baidu.com/*"
+    type: skip_upload
+    priority: 200
+
+  - pattern: "passport.weibo.com/*"
+    type: skip_upload
+    priority: 200
+
+  # ===========================================================================
+  # 银行 / 金融 → skip_upload
+  # ===========================================================================
+  - pattern: "*.cmbchina.com/*"
+    type: skip_upload
+    priority: 200
+    note: "招商银行"
+
+  - pattern: "*.icbc.com.cn/*"
+    type: skip_upload
+    priority: 200
+    note: "工行"
+
+  - pattern: "*.ccb.com/*"
+    type: skip_upload
+    priority: 200
+    note: "建行"
+
+  - pattern: "*.boc.cn/*"
+    type: skip_upload
+    priority: 200
+    note: "中行"
+
+  - pattern: "*.abchina.com/*"
+    type: skip_upload
+    priority: 200
+    note: "农行"
+
+  - pattern: "alipay.com/*"
+    type: skip_upload
+    priority: 200
+
+  - pattern: "*.alipay.com/*"
+    type: skip_upload
+    priority: 200
+
+  # ===========================================================================
+  # 本地 / 内网 → skip_upload
+  # ===========================================================================
+  - pattern: "localhost*"
+    type: skip_upload
+    priority: 200
+
+  - pattern: "127.0.0.1*"
+    type: skip_upload
+    priority: 200
+
+  - pattern: "192.168.*.*"
+    type: skip_upload
+    priority: 200
+
+  - pattern: "10.*.*.*"
+    type: skip_upload
+    priority: 200
+
+  - pattern: "*.local"
+    type: skip_upload
+    priority: 200

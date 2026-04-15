@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="32" height="32">
+  <rect width="32" height="32" rx="7" fill="#FFFFFF" stroke="#E7E5E4" stroke-width="0.5"/>
+  <!-- T 用路径绘制，不依赖字体渲染 -->
+  <rect x="6" y="9.5" width="16" height="3.2" rx="0.5" fill="#1C1917"/>
+  <rect x="11.75" y="9.5" width="4.5" height="16" rx="0.5" fill="#1C1917"/>
+  <!-- 绿点 — T 横笔画右端旁，在圆形裁切安全区内 -->
+  <circle cx="24.5" cy="7.5" r="2.5" fill="#22C55E"/>
+</svg>
