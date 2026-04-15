@@ -5,7 +5,7 @@ import path from "node:path";
 // Tauri 期望固定端口；HMR 必须用 host 1421（macOS / Windows 都接受）
 const host = process.env.TAURI_DEV_HOST;
 
-export default defineConfig(async () => ({
+export default defineConfig({
   plugins: [react()],
   resolve: {
     alias: {
@@ -35,4 +35,4 @@ export default defineConfig(async () => ({
     minify: !process.env.TAURI_ENV_DEBUG ? "esbuild" : false,
     sourcemap: !!process.env.TAURI_ENV_DEBUG,
   },
-}));
+});
