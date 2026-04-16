@@ -12,7 +12,7 @@ mod storage;
 mod window;
 
 use commands::AppState;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use tauri::Manager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -33,9 +33,23 @@ pub fn run() {
             tauri_plugin_global_shortcut::Builder::new()
                 .with_handler(|app, _shortcut, event| {
                     use tauri_plugin_global_shortcut::ShortcutState;
-                    if event.state == ShortcutState::Pressed {
-                        window::panel::toggle_panel(app);
+                    if event.state != ShortcutState::Pressed {
+                        return;
                     }
+                    // 只在即将 show panel 时抓前景窗口（hide 时 panel 自己才是前景，抓了没用）
+                    let will_show = app
+                        .get_webview_window(window::panel::PANEL_LABEL)
+                        .map(|w| !w.is_visible().unwrap_or(false))
+                        .unwrap_or(false);
+                    if will_show {
+                        let fg = window::platform::capture_foreground();
+                        if let Some(state) = app.try_state::<AppState>() {
+                            if let Ok(mut guard) = state.prev_foreground.lock() {
+                                *guard = fg;
+                            }
+                        }
+                    }
+                    window::panel::toggle_panel(app);
                 })
                 .build(),
         )
@@ -48,6 +62,8 @@ pub fn run() {
             commands::list_recent_clipboard,
             commands::get_clipboard_detail,
             commands::get_today_stats,
+            commands::copy_image_to_clipboard,
+            commands::paste_to_previous,
             commands::forget_clipboard,
             commands::pause_capture,
             commands::resume_capture,
@@ -102,6 +118,7 @@ pub fn run() {
             app.manage(AppState {
                 db,
                 capture: capture_state,
+                prev_foreground: Mutex::new(None),
             });
 
             // 6. 注册全局快捷键：Cmd+Shift+V (macOS) / Ctrl+Shift+V (其他) → toggle panel

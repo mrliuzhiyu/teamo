@@ -1,15 +1,14 @@
 import { useCallback, useEffect, useRef } from "react";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
+import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import type { ClipboardRow } from "./types";
-import { usePanel } from "./usePanel";
+import { usePanel, UNDO_WINDOW_MS } from "./usePanel";
 import StatsHeader from "./StatsHeader";
 import SearchBar from "./SearchBar";
 import CardList from "./CardList";
 import ActionBar from "./ActionBar";
 import UndoToast from "./UndoToast";
-
-const UNDO_WINDOW_MS = 5000;
 
 export default function PanelApp() {
   const panel = usePanel();
@@ -20,23 +19,45 @@ export default function PanelApp() {
   }, []);
 
   // 复制到系统剪切板（仅 text/url；image 粘贴留 Phase 3B），不关闭窗口
-  const copyToClipboard = useCallback(async (row: ClipboardRow) => {
-    if (row.content_type !== "text" && row.content_type !== "url") return;
-    const text = row.content ?? "";
-    if (!text) return;
+  // 返回 true = 确实写入剪切板；false = 跳过（file 类型 / 空内容 / 写入异常）
+  // text/url → writeText；image → 后端 copy_image_to_clipboard（读 PNG + arboard set_image）
+  const copyToClipboard = useCallback(async (row: ClipboardRow): Promise<boolean> => {
     try {
-      await writeText(text);
+      if (row.content_type === "image") {
+        if (!row.image_path) return false;
+        await invoke("copy_image_to_clipboard", { id: row.id });
+        return true;
+      }
+      if (row.content_type === "text" || row.content_type === "url") {
+        const text = row.content ?? "";
+        if (!text) return false;
+        await writeText(text);
+        return true;
+      }
+      // file 类型：CF_HDROP 粘贴需要平台特殊化，留更后（v0.2+）
+      return false;
     } catch (e) {
-      console.error("writeText failed", e);
+      console.error("copyToClipboard failed", e);
+      return false;
     }
   }, []);
 
-  // Enter 行为 = 复制 + 关闭（用户再手动 Cmd/Ctrl+V）
+  // Enter 行为：复制 + 关闭面板 + 尝试系统粘贴（Windows 触发 Ctrl+V；其他平台静默回退为手动粘贴）
+  // 关键：若 copyToClipboard 返回 false（图片/文件/空/写入失败），
+  // 不能 invoke paste_to_previous — 否则 Ctrl+V 会粘贴用户上一次手动复制的内容，
+  // 不符合用户选中此条的意图。
   const handleEnter = useCallback(async () => {
     const row = panel.list[panel.selectedIndex];
     if (!row) return;
-    await copyToClipboard(row);
+    const copied = await copyToClipboard(row);
     await hidePanel();
+    if (!copied) return;
+    try {
+      await invoke("paste_to_previous");
+    } catch (e) {
+      // 非 Windows 平台 / 模拟失败：用户已拿到剪切板内容，手动 Cmd/Ctrl+V 即可
+      console.debug("paste_to_previous unavailable:", e);
+    }
   }, [panel.list, panel.selectedIndex, copyToClipboard, hidePanel]);
 
   // 右侧按钮「复制」：仅写入剪切板、不关闭（UI 可见反馈留给后续增强）
@@ -97,8 +118,9 @@ export default function PanelApp() {
     const win = getCurrentWebviewWindow();
     const unlistenPromise = win.onFocusChanged(({ payload: focused }) => {
       if (focused) {
+        // 只 focus 不 select：保留用户正在输入的 query。
+        // 切窗再切回不应覆盖输入内容（想清空可用清除按钮或 Escape）。
         searchRef.current?.focus();
-        searchRef.current?.select();
       }
     });
     return () => {

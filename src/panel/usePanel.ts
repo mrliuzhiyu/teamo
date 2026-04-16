@@ -5,7 +5,7 @@ import type { ClipboardRow, TodayStats } from "./types";
 
 const PAGE_SIZE = 20;
 const SEARCH_DEBOUNCE_MS = 300;
-const UNDO_WINDOW_MS = 5000;
+export const UNDO_WINDOW_MS = 5000;
 
 interface PendingForget {
   row: ClipboardRow;
@@ -45,7 +45,11 @@ export function usePanel(): PanelState {
 
   const debounceTimer = useRef<number | null>(null);
   const pendingRef = useRef<PendingForget | null>(null);
-  pendingRef.current = pendingForget;
+  // 镜像 pendingForget 到 ref，供闭包（flushPending/undoForget）读最新值。
+  // 放 useEffect 里而非 render body，符合 React 规范（避免 StrictMode 双 render 下 ref 被赋值两次等）
+  useEffect(() => {
+    pendingRef.current = pendingForget;
+  }, [pendingForget]);
 
   const loadRecent = useCallback(async () => {
     try {
@@ -141,13 +145,12 @@ export function usePanel(): PanelState {
     setSelectedIndex((idx) => Math.min(idx, Math.max(0, list.length - 2)));
 
     const timeoutId = window.setTimeout(() => {
-      // 5s 后真删
-      invoke<boolean>("forget_clipboard", { id: row.id })
-        .catch((e) => setError(String(e)))
-        .finally(() => {
-          // 清 pending（仅当仍是这个 id）
-          setPendingForget((cur) => (cur?.row.id === row.id ? null : cur));
-        });
+      // 关键顺序：**先清 pending 让 UndoToast 立即 unmount，再调真删**。
+      // 避免 "invoke 执行期间 UndoToast 仍显示 0s 撤销 → 用户点撤销 → 插回已真删 row → UI/DB 不一致" 的 race。
+      setPendingForget((cur) => (cur?.row.id === row.id ? null : cur));
+      invoke<boolean>("forget_clipboard", { id: row.id }).catch((e) =>
+        setError(String(e)),
+      );
     }, UNDO_WINDOW_MS);
 
     setPendingForget({ row, originalIndex: index, timeoutId });
@@ -192,16 +195,20 @@ export function usePanel(): PanelState {
     const win = getCurrentWebviewWindow();
     const unlistenPromise = win.onFocusChanged(({ payload: focused }) => {
       if (focused) {
-        void refresh();
+        // 只刷新元信息（stats/暂停状态），**不刷 list**。
+        // 如果用户正在搜索，refresh→loadRecent 会覆盖搜索结果导致状态不一致
+        // （搜索框仍显示 query，列表却变回最近 20 条）。
+        void loadStats();
+        void loadPauseState();
       } else {
-        // 面板失焦时立即 flush pending forget，避免 5s 窗口横跨会话
+        // 失焦时立即 flush pending forget，避免 5s 窗口横跨会话
         void flushPending();
       }
     });
     return () => {
       void unlistenPromise.then((un) => un());
     };
-  }, [refresh, flushPending]);
+  }, [loadStats, loadPauseState, flushPending]);
 
   return {
     list,

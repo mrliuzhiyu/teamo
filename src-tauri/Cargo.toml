@@ -16,6 +16,8 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2.0", features = [] }
 
 [dependencies]
+# PNG encode/decode（Phase 3C：图片粘贴 + clipboard capture 存真 PNG 而非 raw RGBA）
+image = { version = "0.25", default-features = false, features = ["png"] }
 # Tauri 2.x 核心
 tauri = { version = "2.0", features = ["tray-icon"] }
 tauri-plugin-autostart = "2.0"
@@ -42,6 +44,13 @@ keyring = "3.0"
 
 # HTTP（云端通信，Phase 1B 启用）
 reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
+
+# Windows 平台系统粘贴模拟（Phase 3B）
+# macOS/Linux 暂不引入，避免 Linux libudev / macOS accessibility 权限负担；
+# 等 Phase 4 做 macOS NSPanel 时一起补。
+[target.'cfg(target_os = "windows")'.dependencies]
+enigo = "0.2"
+winapi = { version = "0.3", features = ["winuser", "processthreadsapi"] }
 
 [features]
 # 默认启用平台默认特性

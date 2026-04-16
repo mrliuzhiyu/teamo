@@ -219,11 +219,19 @@ pub fn insert_clipboard(conn: &Connection, req: InsertRequest) -> Result<InsertR
 }
 
 /// FTS5 全文搜索
+///
+/// 用户输入的 query 会原样当成短语搜索——把整个字符串用 `"` 包起来，
+/// 内部的 `"` 按 FTS5 规范 double-escape 成 `""`。这样不管用户输入什么
+/// 特殊字符（括号、AND/OR/NOT、星号、减号）都不会被 FTS5 当成语法，
+/// 避免"搜 `foo(bar)` 就抛 FTS5 syntax error"。
 pub fn search_clipboard(
     conn: &Connection,
     query: &str,
     limit: i64,
 ) -> Result<Vec<ClipboardRow>, rusqlite::Error> {
+    let escaped = query.replace('"', "\"\"");
+    let phrase = format!("\"{escaped}\"");
+
     let mut stmt = conn.prepare(
         "SELECT c.id, c.content_hash, c.content, c.content_type, c.size_bytes,
                 c.image_path, c.file_path, c.source_app, c.source_url, c.source_title,
@@ -238,7 +246,7 @@ pub fn search_clipboard(
     )?;
 
     let rows = stmt
-        .query_map(params![query, limit], row_to_clipboard)?
+        .query_map(params![phrase, limit], row_to_clipboard)?
         .filter_map(|r| r.ok())
         .collect();
 
@@ -694,6 +702,43 @@ mod tests {
 
         let missing = get_setting(&conn, "nonexistent").unwrap();
         assert!(missing.is_none());
+    }
+
+    #[test]
+    fn test_search_fts5_special_chars_no_panic() {
+        // 用户输入的特殊字符（括号 / AND/OR/NOT / 引号 / 星号 / 减号）
+        // 在未转义时会让 FTS5 抛语法错误。短语转义后任意输入都应安全。
+        let conn = setup_db();
+
+        for (i, content) in [
+            "hello(world)",
+            "foo AND bar",
+            "\"double quoted\"",
+            "NOT good",
+            "a * b",
+            "minus-sign",
+        ]
+        .iter()
+        .enumerate()
+        {
+            let req = InsertRequest {
+                id: format!("sp-{i}"),
+                content: Some(content.to_string()),
+                content_type: "text".to_string(),
+                image_path: None,
+                file_path: None,
+                source_app: None,
+            };
+            insert_clipboard(&conn, req).unwrap();
+        }
+
+        // 任何含特殊字符的 query 都不应 panic（即便匹配 0 条也 OK）
+        assert!(search_clipboard(&conn, "hello(world)", 10).is_ok());
+        assert!(search_clipboard(&conn, "foo AND bar", 10).is_ok());
+        assert!(search_clipboard(&conn, "\"double quoted\"", 10).is_ok());
+        assert!(search_clipboard(&conn, "NOT good", 10).is_ok());
+        assert!(search_clipboard(&conn, "(test)", 10).is_ok());
+        assert!(search_clipboard(&conn, "", 10).is_ok());
     }
 
     #[test]

@@ -11,19 +11,25 @@ export function formatRelativeTime(tsMs: number): string {
   if (hour < 24) return `${hour} 小时前`;
 
   const d = new Date(tsMs);
-  const today = new Date();
-  const yest = new Date(today.getFullYear(), today.getMonth(), today.getDate() - 1);
+  const now_d = new Date();
+  const yest = new Date(now_d.getFullYear(), now_d.getMonth(), now_d.getDate() - 1);
   const pad = (n: number) => String(n).padStart(2, "0");
   if (d.toDateString() === yest.toDateString()) {
     return `昨天 ${pad(d.getHours())}:${pad(d.getMinutes())}`;
   }
-  return `${d.getMonth() + 1} 月 ${d.getDate()} 日`;
+  // 同年不显示年份；跨年显示 "2024 年 12 月 15 日" 避免歧义
+  if (d.getFullYear() === now_d.getFullYear()) {
+    return `${d.getMonth() + 1} 月 ${d.getDate()} 日`;
+  }
+  return `${d.getFullYear()} 年 ${d.getMonth() + 1} 月 ${d.getDate()} 日`;
 }
 
 export function formatPreview(row: ClipboardRow, maxLen = 80): string {
   if (row.sensitive_type) {
-    const src = row.source_app ? ` 从 ${row.source_app}` : "";
-    return `••••••• ${row.sensitive_type}${src}`;
+    // AC-4 原型："••••••• 从 1Password"（只显示来源，不显示 sensitive_type 冗余信息）
+    return row.source_app
+      ? `••••••• 从 ${row.source_app}`
+      : `••••••• (${row.sensitive_type})`;
   }
   if (row.content_type === "image") {
     return `[图片] ${row.image_path ?? ""}`;
@@ -33,7 +39,10 @@ export function formatPreview(row: ClipboardRow, maxLen = 80): string {
   }
   const raw = row.content ?? "";
   const clean = raw.replace(/\s+/g, " ").trim();
-  return clean.length > maxLen ? clean.slice(0, maxLen) + "…" : clean;
+  // 用 Array.from 按 Unicode code point 切，避免在 emoji（surrogate pair）中间切出无效字符
+  const chars = Array.from(clean);
+  if (chars.length <= maxLen) return clean;
+  return chars.slice(0, maxLen).join("") + "…";
 }
 
 export type StateBadge = { label: string; tone: "local" | "cloud" | "blocked" };

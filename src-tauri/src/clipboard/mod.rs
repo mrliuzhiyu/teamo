@@ -153,15 +153,20 @@ pub fn start_capture_loop(
                 }
                 last_text_hash = Some(img_hash.clone());
 
-                // 保存图片到文件
+                // 保存图片到文件（真 PNG 编码，自带宽高，Phase 3C 粘贴时可还原）
                 let id = generate_id();
                 let filename = format!("{}.png", &id);
                 let img_path = db.images_dir().join(&filename);
 
-                // arboard 返回 RGBA 像素，写成 PNG 需要 image crate
-                // v0.1 先存原始 RGBA bytes（后续 issue 换成 PNG 编码）
-                if let Err(e) = std::fs::write(&img_path, pixels) {
-                    tracing::error!("Failed to save image: {e}");
+                if let Err(e) = image::save_buffer_with_format(
+                    &img_path,
+                    pixels,
+                    image.width as u32,
+                    image.height as u32,
+                    image::ExtendedColorType::Rgba8,
+                    image::ImageFormat::Png,
+                ) {
+                    tracing::error!("Failed to encode image as PNG: {e}");
                     continue;
                 }
 
