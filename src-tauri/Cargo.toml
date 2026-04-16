@@ -33,9 +33,8 @@ tokio = { version = "1.40", features = ["full"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
-# 剪切板监听 + 读写（Phase 1A 业务实现时启用）
-# clipboard-master = "4.0"
-# arboard = "3.4"
+# 剪切板读写
+arboard = "3.4"
 
 # 本地存储 + 安全凭证
 rusqlite = { version = "0.32", features = ["bundled"] }
