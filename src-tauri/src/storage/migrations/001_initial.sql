@@ -6,8 +6,7 @@
 -- ============================================================
 CREATE TABLE clipboard_local (
     id              TEXT PRIMARY KEY,         -- 端侧 UUIDv7
-    content_hash    TEXT NOT NULL,
-    simhash         INTEGER,                  -- 64-bit SimHash 指纹
+    content_hash    TEXT NOT NULL,            -- SHA256(canonicalize(content))，归一化后的精确去重指纹
     content         TEXT,                     -- 全部明文
     content_type    TEXT NOT NULL,            -- text / image / file / html / rtf
     size_bytes      INTEGER,
@@ -32,7 +31,6 @@ CREATE TABLE clipboard_local (
 CREATE INDEX idx_local_state ON clipboard_local(state, captured_at);
 CREATE INDEX idx_local_captured ON clipboard_local(captured_at DESC);
 CREATE INDEX idx_local_hash ON clipboard_local(content_hash);
-CREATE INDEX idx_local_simhash ON clipboard_local(simhash);
 CREATE INDEX idx_local_app ON clipboard_local(source_app, captured_at DESC);
 
 -- ============================================================

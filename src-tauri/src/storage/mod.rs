@@ -2,9 +2,9 @@
 //
 // 职责：数据库连接管理、migration、业务读写
 
+pub mod canonicalize;
 pub mod repository;
 pub mod schema;
-pub mod simhash;
 
 use rusqlite::Connection;
 use std::path::PathBuf;

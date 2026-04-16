@@ -1,12 +1,12 @@
 // repository.rs · 业务读写函数
 //
-// clipboard_local 表的 CRUD + FTS5 搜索 + SimHash 去重
+// clipboard_local 表的 CRUD + FTS5 搜索 + 归一化精确去重
 
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use super::simhash;
+use super::canonicalize::canonicalize;
 
 /// 剪切板记录行（前端可见）
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -46,7 +46,7 @@ pub struct InsertRequest {
 pub enum InsertResult {
     /// 新记录已插入
     Inserted,
-    /// 与已有记录近似重复，已更新 occurrence_count
+    /// 与已有记录归一化后等价，已更新 occurrence_count
     Deduplicated { existing_id: String },
 }
 
@@ -162,23 +162,19 @@ fn sha256_digest(data: &[u8]) -> [u8; 32] {
     result
 }
 
-/// 插入剪切板记录（含 SHA256 精确去重 + SimHash 近似去重）
+/// 插入剪切板记录（归一化精确去重）
 ///
-/// 去重窗口：30 秒内同 hash 或 SimHash 距离 <= 3 → bump occurrence_count
+/// content_hash = SHA256(canonicalize(content))
+/// 30 秒窗口内同 hash → bump occurrence_count 而不新建行
 pub fn insert_clipboard(conn: &Connection, req: InsertRequest) -> Result<InsertResult, rusqlite::Error> {
     let now = now_ms();
-    let dedup_window = now - 30_000; // 30 秒窗口
+    let dedup_window = now - 30_000;
 
-    let content_bytes = req.content.as_deref().unwrap_or("").as_bytes();
-    let content_hash = sha256_hex(content_bytes);
-    let content_simhash = req
-        .content
-        .as_deref()
-        .map(simhash::simhash)
-        .unwrap_or(0);
-    let size_bytes = content_bytes.len() as i64;
+    let raw_content = req.content.as_deref().unwrap_or("");
+    let canon = canonicalize(raw_content);
+    let content_hash = sha256_hex(canon.as_bytes());
+    let size_bytes = raw_content.as_bytes().len() as i64;
 
-    // 1. 精确去重：30 秒内同 hash
     let exact_dup: Option<String> = conn
         .query_row(
             "SELECT id FROM clipboard_local
@@ -196,50 +192,17 @@ pub fn insert_clipboard(conn: &Connection, req: InsertRequest) -> Result<InsertR
              WHERE id = ?2",
             params![now, existing_id],
         )?;
-        return Ok(InsertResult::Deduplicated {
-            existing_id,
-        });
+        return Ok(InsertResult::Deduplicated { existing_id });
     }
 
-    // 2. SimHash 近似去重：30 秒内汉明距离 <= 3
-    if req.content_type == "text" && req.content.is_some() {
-        let mut stmt = conn.prepare(
-            "SELECT id, simhash FROM clipboard_local
-             WHERE content_type = 'text' AND simhash IS NOT NULL AND captured_at > ?1
-             ORDER BY captured_at DESC LIMIT 50",
-        )?;
-        let rows: Vec<(String, i64)> = stmt
-            .query_map(params![dedup_window], |row| {
-                Ok((row.get(0)?, row.get(1)?))
-            })?
-            .filter_map(|r| r.ok())
-            .collect();
-
-        for (existing_id, existing_simhash) in rows {
-            if simhash::is_near_duplicate(content_simhash, existing_simhash as u64, 3) {
-                conn.execute(
-                    "UPDATE clipboard_local
-                     SET occurrence_count = occurrence_count + 1, last_seen_at = ?1, updated_at = ?1
-                     WHERE id = ?2",
-                    params![now, existing_id],
-                )?;
-                return Ok(InsertResult::Deduplicated {
-                    existing_id,
-                });
-            }
-        }
-    }
-
-    // 3. 新记录
     conn.execute(
         "INSERT INTO clipboard_local
-         (id, content_hash, simhash, content, content_type, size_bytes, image_path, file_path,
+         (id, content_hash, content, content_type, size_bytes, image_path, file_path,
           source_app, captured_at, state, last_seen_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 'captured', ?10)",
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 'captured', ?9)",
         params![
             req.id,
             content_hash,
-            content_simhash as i64,
             req.content,
             req.content_type,
             size_bytes,
@@ -468,7 +431,8 @@ mod tests {
     }
 
     #[test]
-    fn test_simhash_dedup() {
+    fn test_canonical_dedup_trailing_punct() {
+        // 末尾多一个句号 → 归一化后等价 → 去重
         let conn = setup_db();
 
         let req1 = InsertRequest {
@@ -481,7 +445,7 @@ mod tests {
         };
         let req2 = InsertRequest {
             id: "uuid-2".to_string(),
-            content: Some("Rust 是一门注重安全速度和并发的编程语言。".to_string()), // 多一个句号
+            content: Some("Rust 是一门注重安全速度和并发的编程语言。".to_string()),
             content_type: "text".to_string(),
             image_path: None,
             file_path: None,
@@ -492,6 +456,64 @@ mod tests {
         let result = insert_clipboard(&conn, req2).unwrap();
 
         assert!(matches!(result, InsertResult::Deduplicated { .. }));
+    }
+
+    #[test]
+    fn test_canonical_dedup_trailing_whitespace() {
+        // 末尾多空白 / 首尾空白 → 归一化后等价 → 去重
+        let conn = setup_db();
+
+        let req1 = InsertRequest {
+            id: "uuid-1".to_string(),
+            content: Some("hello world".to_string()),
+            content_type: "text".to_string(),
+            image_path: None,
+            file_path: None,
+            source_app: None,
+        };
+        let req2 = InsertRequest {
+            id: "uuid-2".to_string(),
+            content: Some("  hello world\n".to_string()),
+            content_type: "text".to_string(),
+            image_path: None,
+            file_path: None,
+            source_app: None,
+        };
+
+        insert_clipboard(&conn, req1).unwrap();
+        let result = insert_clipboard(&conn, req2).unwrap();
+
+        assert!(matches!(result, InsertResult::Deduplicated { .. }));
+    }
+
+    #[test]
+    fn test_word_change_not_dedup() {
+        // 词级修改是两次真实的不同复制，不该去重
+        let conn = setup_db();
+
+        let req1 = InsertRequest {
+            id: "uuid-1".to_string(),
+            content: Some("Rust 注重安全的编程语言".to_string()),
+            content_type: "text".to_string(),
+            image_path: None,
+            file_path: None,
+            source_app: None,
+        };
+        let req2 = InsertRequest {
+            id: "uuid-2".to_string(),
+            content: Some("Rust 注重速度的编程语言".to_string()),
+            content_type: "text".to_string(),
+            image_path: None,
+            file_path: None,
+            source_app: None,
+        };
+
+        insert_clipboard(&conn, req1).unwrap();
+        let result = insert_clipboard(&conn, req2).unwrap();
+
+        assert!(matches!(result, InsertResult::Inserted));
+        let items = list_recent(&conn, 10, 0).unwrap();
+        assert_eq!(items.len(), 2);
     }
 
     #[test]
