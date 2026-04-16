@@ -173,7 +173,7 @@ pub fn insert_clipboard(conn: &Connection, req: InsertRequest) -> Result<InsertR
     let raw_content = req.content.as_deref().unwrap_or("");
     let canon = canonicalize(raw_content);
     let content_hash = sha256_hex(canon.as_bytes());
-    let size_bytes = raw_content.as_bytes().len() as i64;
+    let size_bytes = raw_content.len() as i64;
 
     let exact_dup: Option<String> = conn
         .query_row(
