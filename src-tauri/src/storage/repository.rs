@@ -58,8 +58,8 @@ fn now_ms() -> i64 {
         .as_millis() as i64
 }
 
-/// SHA256 哈希
-fn sha256_hex(data: &[u8]) -> String {
+/// SHA256 哈希（pub 以便 clipboard 层对图片像素做指纹）
+pub fn sha256_hex(data: &[u8]) -> String {
     use std::fmt::Write;
     // 简单实现：用 rusqlite 不带 sha256，我们手动算
     // 为了不引新依赖，用一个最小的 SHA256
@@ -73,6 +73,8 @@ fn sha256_hex(data: &[u8]) -> String {
 
 /// 最小化 SHA256 实现（纯 Rust，无外部依赖）
 fn sha256_digest(data: &[u8]) -> [u8; 32] {
+    // 内部函数，不对外暴露；外部调用 sha256_hex
+
     const K: [u32; 64] = [
         0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4,
         0xab1c5ed5, 0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe,
@@ -484,6 +486,67 @@ mod tests {
         let result = insert_clipboard(&conn, req2).unwrap();
 
         assert!(matches!(result, InsertResult::Deduplicated { .. }));
+    }
+
+    #[test]
+    fn test_image_dedup_by_pixel_hash() {
+        // 两张不同图片：content 各自是 pixel SHA256 hex → 不应误判重复
+        let conn = setup_db();
+
+        let req1 = InsertRequest {
+            id: "img-1".to_string(),
+            content: Some("a3b5c7d9e1f20000000000000000000000000000000000000000000000000000".to_string()),
+            content_type: "image".to_string(),
+            image_path: Some("img-1.png".to_string()),
+            file_path: None,
+            source_app: None,
+        };
+        let req2 = InsertRequest {
+            id: "img-2".to_string(),
+            content: Some("ff00aa11bb22cc33000000000000000000000000000000000000000000000000".to_string()),
+            content_type: "image".to_string(),
+            image_path: Some("img-2.png".to_string()),
+            file_path: None,
+            source_app: None,
+        };
+
+        assert!(matches!(insert_clipboard(&conn, req1).unwrap(), InsertResult::Inserted));
+        assert!(matches!(insert_clipboard(&conn, req2).unwrap(), InsertResult::Inserted));
+
+        let items = list_recent(&conn, 10, 0).unwrap();
+        assert_eq!(items.len(), 2, "两张不同图片应各存一条");
+    }
+
+    #[test]
+    fn test_image_dedup_same_pixel_hash() {
+        // 同一张图片（相同 pixel SHA256）→ 应去重
+        let conn = setup_db();
+
+        let fingerprint = "deadbeef00000000000000000000000000000000000000000000000000000000";
+        let req1 = InsertRequest {
+            id: "img-1".to_string(),
+            content: Some(fingerprint.to_string()),
+            content_type: "image".to_string(),
+            image_path: Some("img-1.png".to_string()),
+            file_path: None,
+            source_app: None,
+        };
+        let req2 = InsertRequest {
+            id: "img-2".to_string(),
+            content: Some(fingerprint.to_string()),
+            content_type: "image".to_string(),
+            image_path: Some("img-2.png".to_string()),
+            file_path: None,
+            source_app: None,
+        };
+
+        insert_clipboard(&conn, req1).unwrap();
+        let result = insert_clipboard(&conn, req2).unwrap();
+
+        assert!(matches!(result, InsertResult::Deduplicated { .. }));
+        let items = list_recent(&conn, 10, 0).unwrap();
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].occurrence_count, 2);
     }
 
     #[test]

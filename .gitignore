@@ -1,7 +1,11 @@
 # Tauri / Rust
 src-tauri/target/
 src-tauri/Cargo.lock.bak
+src-tauri/gen/schemas/
 **/*.rs.bk
+
+# Dev logs
+tauri-dev.log
 
 # Node / pnpm
 node_modules/

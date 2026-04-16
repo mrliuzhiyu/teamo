@@ -165,9 +165,13 @@ pub fn start_capture_loop(
                     continue;
                 }
 
+                // image 的 dedup 指纹：用像素 SHA256 作为 content 字符串
+                // 解决 bug：之前 content=None → canonicalize("") → sha256("")，所有图片共享同一 hash 误判重复
+                let pixel_fingerprint = repository::sha256_hex(pixels);
+
                 let req = repository::InsertRequest {
                     id,
-                    content: None,
+                    content: Some(pixel_fingerprint),
                     content_type: "image".to_string(),
                     image_path: Some(filename),
                     file_path: None,
