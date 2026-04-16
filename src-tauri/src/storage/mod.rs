@@ -51,11 +51,6 @@ impl AppDatabase {
         self.conn.lock().expect("database mutex poisoned")
     }
 
-    /// 数据目录路径
-    pub fn data_dir(&self) -> &PathBuf {
-        &self.data_dir
-    }
-
     /// 图片存储目录
     pub fn images_dir(&self) -> PathBuf {
         self.data_dir.join("images")

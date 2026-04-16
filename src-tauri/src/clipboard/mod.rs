@@ -207,7 +207,7 @@ fn generate_id() -> String {
     format!(
         "{:08x}-{:04x}-4{:03x}-{:04x}-{:012x}",
         (h1 >> 32) as u32,
-        (h1 >> 16) as u16 & 0xFFFF,
+        (h1 >> 16) as u16,
         (h1 & 0x0FFF) as u16,
         ((h2 >> 48) as u16 & 0x3FFF) | 0x8000,
         h2 & 0xFFFF_FFFF_FFFF,

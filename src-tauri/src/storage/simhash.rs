@@ -24,18 +24,18 @@ pub fn simhash(text: &str) -> u64 {
         token.hash(&mut hasher);
         let hash = hasher.finish();
 
-        for i in 0..64 {
+        for (i, w) in weights.iter_mut().enumerate() {
             if (hash >> i) & 1 == 1 {
-                weights[i] += 1;
+                *w += 1;
             } else {
-                weights[i] -= 1;
+                *w -= 1;
             }
         }
     }
 
     let mut fingerprint: u64 = 0;
-    for i in 0..64 {
-        if weights[i] > 0 {
+    for (i, w) in weights.iter().enumerate() {
+        if *w > 0 {
             fingerprint |= 1u64 << i;
         }
     }

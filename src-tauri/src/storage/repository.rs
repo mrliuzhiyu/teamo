@@ -273,7 +273,7 @@ pub fn search_clipboard(
     )?;
 
     let rows = stmt
-        .query_map(params![query, limit], |row| row_to_clipboard(row))?
+        .query_map(params![query, limit], row_to_clipboard)?
         .filter_map(|r| r.ok())
         .collect();
 
@@ -298,7 +298,7 @@ pub fn list_recent(
     )?;
 
     let rows = stmt
-        .query_map(params![limit, offset], |row| row_to_clipboard(row))?
+        .query_map(params![limit, offset], row_to_clipboard)?
         .filter_map(|r| r.ok())
         .collect();
 
