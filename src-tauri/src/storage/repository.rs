@@ -316,7 +316,7 @@ pub fn get_detail(conn: &Connection, id: &str) -> Result<Option<ClipboardRow>, r
          FROM clipboard_local
          WHERE id = ?1",
         params![id],
-        |row| row_to_clipboard(row),
+        row_to_clipboard,
     );
 
     match result {
