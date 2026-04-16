@@ -47,6 +47,16 @@ pub fn get_clipboard_detail(
     repository::get_detail(&conn, &id).map_err(|e| e.to_string())
 }
 
+// ── 今日统计 ──
+
+#[tauri::command]
+pub fn get_today_stats(
+    state: State<'_, AppState>,
+) -> Result<repository::TodayStats, String> {
+    let conn = state.db.conn();
+    repository::get_today_stats(&conn).map_err(|e| e.to_string())
+}
+
 // ── 忘记 ──
 
 #[tauri::command]

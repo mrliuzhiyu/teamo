@@ -316,6 +316,37 @@ pub fn forget(conn: &Connection, id: &str, images_dir: &std::path::Path) -> Resu
     Ok(affected > 0)
 }
 
+/// 今日统计（按本地时区）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TodayStats {
+    pub captured: i64,
+    pub blocked: i64,
+    pub uploaded: i64,
+}
+
+/// 查询今日统计：已记 / 拦截 / 上云
+///
+/// 用 SQLite 的 `DATE(..., 'unixepoch', 'localtime')` 对 captured_at（Unix ms）
+/// 做本地时区的日期归一化——避免引入 chrono 依赖。
+pub fn get_today_stats(conn: &Connection) -> Result<TodayStats, rusqlite::Error> {
+    conn.query_row(
+        "SELECT
+           COUNT(*),
+           COALESCE(SUM(CASE WHEN blocked_reason IS NOT NULL THEN 1 ELSE 0 END), 0),
+           COALESCE(SUM(CASE WHEN state = 'uploaded' THEN 1 ELSE 0 END), 0)
+         FROM clipboard_local
+         WHERE DATE(captured_at/1000, 'unixepoch', 'localtime') = DATE('now', 'localtime')",
+        [],
+        |row| {
+            Ok(TodayStats {
+                captured: row.get(0)?,
+                blocked: row.get(1)?,
+                uploaded: row.get(2)?,
+            })
+        },
+    )
+}
+
 /// 获取设置值
 pub fn get_setting(conn: &Connection, key: &str) -> Result<Option<String>, rusqlite::Error> {
     let result = conn.query_row(

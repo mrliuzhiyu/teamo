@@ -12,6 +12,7 @@
   "app": {
     "windows": [
       {
+        "label": "main",
         "title": "Teamo",
         "width": 480,
         "height": 640,
@@ -22,6 +23,21 @@
         "decorations": true,
         "transparent": false,
         "alwaysOnTop": false
+      },
+      {
+        "label": "panel",
+        "url": "panel.html",
+        "title": "Teamo Quick Panel",
+        "width": 480,
+        "height": 640,
+        "resizable": false,
+        "decorations": false,
+        "transparent": false,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "visible": false,
+        "focus": false,
+        "center": true
       }
     ],
     "security": {

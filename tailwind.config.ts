@@ -3,7 +3,7 @@ import type { Config } from "tailwindcss";
 // 沿用 TextView 设计系统：stone 中性色 + amber Premium + emerald 成功
 // 详见 TextView 主仓库 DESIGN.md
 export default {
-  content: ["./index.html", "./src/**/*.{js,ts,jsx,tsx}"],
+  content: ["./index.html", "./panel.html", "./src/**/*.{js,ts,jsx,tsx}"],
   darkMode: "class",
   theme: {
     extend: {

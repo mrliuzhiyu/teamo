@@ -9,6 +9,7 @@
 mod clipboard;
 mod commands;
 mod storage;
+mod window;
 
 use commands::AppState;
 use std::sync::Arc;
@@ -28,7 +29,16 @@ pub fn run() {
         .plugin(tauri_plugin_store::Builder::default().build())
         .plugin(tauri_plugin_sql::Builder::default().build())
         .plugin(tauri_plugin_clipboard_manager::init())
-        .plugin(tauri_plugin_global_shortcut::Builder::default().build())
+        .plugin(
+            tauri_plugin_global_shortcut::Builder::new()
+                .with_handler(|app, _shortcut, event| {
+                    use tauri_plugin_global_shortcut::ShortcutState;
+                    if event.state == ShortcutState::Pressed {
+                        window::panel::toggle_panel(app);
+                    }
+                })
+                .build(),
+        )
         .plugin(tauri_plugin_autostart::init(
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
             None,
@@ -37,6 +47,7 @@ pub fn run() {
             commands::search_clipboard,
             commands::list_recent_clipboard,
             commands::get_clipboard_detail,
+            commands::get_today_stats,
             commands::forget_clipboard,
             commands::pause_capture,
             commands::resume_capture,
@@ -92,6 +103,21 @@ pub fn run() {
                 db,
                 capture: capture_state,
             });
+
+            // 6. 注册全局快捷键：Cmd+Shift+V (macOS) / Ctrl+Shift+V (其他) → toggle panel
+            #[cfg(desktop)]
+            {
+                use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut};
+
+                #[cfg(target_os = "macos")]
+                let modifiers = Modifiers::SUPER | Modifiers::SHIFT;
+                #[cfg(not(target_os = "macos"))]
+                let modifiers = Modifiers::CONTROL | Modifiers::SHIFT;
+
+                let shortcut = Shortcut::new(Some(modifiers), Code::KeyV);
+                app.global_shortcut().register(shortcut)?;
+                tracing::info!("Global shortcut registered: toggle panel (Cmd/Ctrl+Shift+V)");
+            }
 
             tracing::info!("Teamo started · clipboard capture active");
             Ok(())

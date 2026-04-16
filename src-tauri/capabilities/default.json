@@ -2,7 +2,7 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
   "description": "Default capabilities for Teamo desktop. Phase 1A scaffold — minimal permissions; expand per feature issue.",
-  "windows": ["main"],
+  "windows": ["main", "panel"],
   "permissions": [
     "core:default",
     "shell:allow-open",
