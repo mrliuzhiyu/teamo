@@ -17,9 +17,9 @@ Teamo 的隐私承诺非常简单：**你的数据，你做主**。
 
 | 平台 | 路径 |
 |---|---|
-| Windows | `%APPDATA%\Teamo\` |
-| macOS | `~/Library/Application Support/Teamo/` |
-| Linux | `~/.local/share/Teamo/` |
+| Windows | `%APPDATA%\cn.textview.teamo\` |
+| macOS | `~/Library/Application Support/cn.textview.teamo/` |
+| Linux | `~/.local/share/cn.textview.teamo/` |
 
 主要文件：
 - `clipboard.db` — 本地 SQLite 数据库（剪切板历史）

@@ -22,7 +22,7 @@ assignees: ''
 
 ## 截图 / 日志
 
-<!-- 如果可能，附上截图。日志位置：%APPDATA%\Teamo\logs\ (Windows) 或 ~/Library/Logs/Teamo/ (macOS) -->
+<!-- 如果可能，附上截图。日志位置：%APPDATA%\cn.textview.teamo\logs\ (Windows) 或 ~/Library/Logs/cn.textview.teamo/ (macOS) -->
 
 ## 环境
 
