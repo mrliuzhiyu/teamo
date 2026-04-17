@@ -1,17 +1,24 @@
 import Section, { Row } from "../components/Section";
 import Switch from "../components/Switch";
 import { useBoolSetting } from "../useSettings";
-import { SETTING_KEYS } from "../types";
+import {
+  SENS_PASSWORD,
+  SENS_TOKEN,
+  SENS_CREDIT_CARD,
+  SENS_ID_CARD,
+  SENS_PHONE,
+  SENS_EMAIL,
+} from "../../lib/settings-keys";
 
-/// 6 个敏感类型开关 + 短文本阈值（Phase 1 UI 占位，后端 filter 会读这些 key
-/// 但 Phase 1 的 apply_filters 还没接入 —— Phase 2 随 filter-engine 扩展时接上）
+/// 6 个敏感类型开关 —— 值写入 SQLite settings 表，后端 filter::apply_filters
+/// 跑每个 detector 前读对应 key 决定是否启用（默认全开）。
 const SENS_ITEMS: Array<{ key: string; label: string; hint: string }> = [
-  { key: SETTING_KEYS.sensPassword, label: "密码", hint: "Aa1@bcdefg 这类强随机串" },
-  { key: SETTING_KEYS.sensToken, label: "Token", hint: "sk-xxx / ghp_xxx / Bearer / JWT" },
-  { key: SETTING_KEYS.sensCreditCard, label: "银行卡", hint: "13-19 位数字 + Luhn 校验" },
-  { key: SETTING_KEYS.sensIdCard, label: "身份证", hint: "18 位 + GB 11643 校验" },
-  { key: SETTING_KEYS.sensPhone, label: "手机号", hint: "中国大陆 1[3-9]xxxx" },
-  { key: SETTING_KEYS.sensEmail, label: "邮箱", hint: "RFC 5322 简化" },
+  { key: SENS_PASSWORD, label: "密码", hint: "Aa1@bcdefg 这类多字符类型短串" },
+  { key: SENS_TOKEN, label: "Token", hint: "sk-xxx / ghp_xxx / Bearer / JWT" },
+  { key: SENS_CREDIT_CARD, label: "银行卡", hint: "13-19 位数字 + Luhn 校验" },
+  { key: SENS_ID_CARD, label: "身份证", hint: "18 位 + GB 11643 校验" },
+  { key: SENS_PHONE, label: "手机号", hint: "中国大陆 1[3-9]xxxx" },
+  { key: SENS_EMAIL, label: "邮箱", hint: "RFC 5322 简化" },
 ];
 
 export default function Privacy() {

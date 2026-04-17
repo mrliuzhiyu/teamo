@@ -57,9 +57,9 @@ export default function CardItem({ row, selected, query, onMouseEnter, onCopy, o
           <button
             onClick={stopAnd(() => onCopy(row))}
             className="px-2 py-0.5 text-[11px] bg-white border border-stone-200 rounded hover:bg-stone-50 text-stone-600"
-            title="复制到剪切板"
+            title="仅复制到剪切板（不关闭面板，不自动粘贴）"
           >
-            复制
+            仅复制
           </button>
           <button
             onClick={stopAnd(() => onForget(row))}

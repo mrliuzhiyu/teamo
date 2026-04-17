@@ -5,10 +5,10 @@
 use rusqlite::Connection;
 
 /// 嵌入 migration SQL 文件
-const MIGRATIONS: &[(i64, &str)] = &[(
-    1,
-    include_str!("migrations/001_initial.sql"),
-)];
+const MIGRATIONS: &[(i64, &str)] = &[
+    (1, include_str!("migrations/001_initial.sql")),
+    (2, include_str!("migrations/002_settings_keys_cleanup.sql")),
+];
 
 /// 获取当前 schema 版本（schema_migrations 表不存在返回 0）
 fn current_version(conn: &Connection) -> i64 {
@@ -76,8 +76,8 @@ mod tests {
         assert!(tables.contains(&"settings".to_string()));
         assert!(tables.contains(&"schema_migrations".to_string()));
 
-        // 验证版本
-        assert_eq!(current_version(&conn), 1);
+        // 版本 = MIGRATIONS 数组最大版本号
+        assert_eq!(current_version(&conn), MIGRATIONS.iter().map(|(v, _)| *v).max().unwrap());
     }
 
     #[test]
@@ -86,9 +86,10 @@ mod tests {
         conn.execute_batch("PRAGMA journal_mode=WAL;").unwrap();
 
         run_migrations(&conn).unwrap();
+        let v1 = current_version(&conn);
         // 第二次执行不报错
         run_migrations(&conn).unwrap();
-        assert_eq!(current_version(&conn), 1);
+        assert_eq!(current_version(&conn), v1);
     }
 
     #[test]
@@ -129,27 +130,20 @@ mod tests {
     }
 
     #[test]
-    fn test_default_settings() {
+    fn test_settings_table_empty_after_migrations() {
+        // migration 001 预置了几个老键，migration 002 清理它们。
+        // 新架构里 settings 表在 fresh migration 后应为空 —— 业务层默认值全走
+        // settings_keys.rs 常量的 *_DEFAULT，不靠 DB INSERT。
         let conn = Connection::open_in_memory().unwrap();
         conn.execute_batch("PRAGMA journal_mode=WAL;").unwrap();
         run_migrations(&conn).unwrap();
 
-        let autostart: String = conn
-            .query_row(
-                "SELECT value FROM settings WHERE key = 'autostart'",
-                [],
-                |row| row.get(0),
-            )
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM settings", [], |row| row.get(0))
             .unwrap();
-        assert_eq!(autostart, "1");
-
-        let retention: String = conn
-            .query_row(
-                "SELECT value FROM settings WHERE key = 'retention_days'",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap();
-        assert_eq!(retention, "0");
+        assert_eq!(
+            count, 0,
+            "settings 表 fresh migration 后应为空，业务默认值走常量而非 DB INSERT"
+        );
     }
 }

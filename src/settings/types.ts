@@ -7,16 +7,5 @@ export interface DataInfo {
   image_bytes: number;
 }
 
-/// settings 表存储的键位（key），值统一 string 类型，语义见各 section
-export const SETTING_KEYS = {
-  theme: "ui.theme",                   // "system" | "light" | "dark"
-  minTextLen: "filter.min_text_len",  // string int, 默认 "8"
-  retention: "data.retention",         // "forever" | "1y" | "6m" | "1m"
-  // 敏感检测 6 个开关
-  sensPassword: "sens.password",
-  sensToken: "sens.token",
-  sensCreditCard: "sens.credit_card",
-  sensIdCard: "sens.id_card",
-  sensPhone: "sens.phone",
-  sensEmail: "sens.email",
-} as const;
+// 设置 key 常量已迁移到 src/lib/settings-keys.ts（与 Rust settings_keys.rs 双源对齐）。
+// 请从那里 import 使用。

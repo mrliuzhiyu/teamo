@@ -10,6 +10,7 @@ mod clipboard;
 mod commands;
 mod export;
 mod filter;
+mod settings_keys;
 mod storage;
 mod tray;
 mod window;
@@ -110,7 +111,9 @@ pub fn run() {
             let capture_state = Arc::new(clipboard::CaptureState::new());
             {
                 let conn = db.conn();
-                if let Ok(Some(paused_val)) = storage::repository::get_setting(&conn, "paused_until") {
+                if let Ok(Some(paused_val)) =
+                    storage::repository::get_setting(&conn, settings_keys::CAPTURE_PAUSED_UNTIL)
+                {
                     if paused_val == "manual" {
                         capture_state.pause(None);
                         tracing::info!("Restored manual pause state");
@@ -120,12 +123,20 @@ pub fn run() {
                             .unwrap()
                             .as_millis() as i64;
                         if until_ms > now_ms {
-                            let remaining = std::time::Duration::from_millis((until_ms - now_ms) as u64);
+                            let remaining =
+                                std::time::Duration::from_millis((until_ms - now_ms) as u64);
                             capture_state.pause(Some(remaining));
-                            tracing::info!("Restored timed pause, {}s remaining", remaining.as_secs());
+                            tracing::info!(
+                                "Restored timed pause, {}s remaining",
+                                remaining.as_secs()
+                            );
                         } else {
                             // 暂停已过期，清除
-                            let _ = storage::repository::set_setting(&conn, "paused_until", None);
+                            let _ = storage::repository::set_setting(
+                                &conn,
+                                settings_keys::CAPTURE_PAUSED_UNTIL,
+                                None,
+                            );
                         }
                     }
                 }
@@ -158,6 +169,39 @@ pub fn run() {
 
             // 7. Tray 图标 + 菜单
             tray::setup_tray(app)?;
+
+            // 8. 首次启动决策 —— Teamo 是后台守护应用，tauri.conf.json 里 main window
+            //    默认 visible=false 静默启动到 tray。但**首次启动**需要 show 设置页作为引导，
+            //    让用户知道 Teamo 装上了 + 配置自启动 + 了解功能。后续启动不再 show。
+            {
+                let state: tauri::State<'_, AppState> = app.state();
+                let is_first_run = {
+                    let conn = state.db.conn();
+                    storage::repository::get_setting(
+                        &conn,
+                        settings_keys::APP_FIRST_RUN_COMPLETED,
+                    )
+                    .ok()
+                    .flatten()
+                    .is_none()
+                };
+
+                if is_first_run {
+                    if let Some(main) = app.get_webview_window("main") {
+                        let _ = main.show();
+                        let _ = main.set_focus();
+                    }
+                    let conn = state.db.conn();
+                    let _ = storage::repository::set_setting(
+                        &conn,
+                        settings_keys::APP_FIRST_RUN_COMPLETED,
+                        Some("1"),
+                    );
+                    tracing::info!("First run — showing main window as onboarding");
+                } else {
+                    tracing::info!("Not first run — staying silent in tray");
+                }
+            }
 
             tracing::info!("Teamo started · clipboard capture active");
             Ok(())

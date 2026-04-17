@@ -720,12 +720,19 @@ mod tests {
     fn test_settings() {
         let conn = setup_db();
 
-        let autostart = get_setting(&conn, "autostart").unwrap();
-        assert_eq!(autostart.as_deref(), Some("1"));
+        // migration 002 清理了预置键，现在默认值靠 settings_keys.rs 常量而不是 DB INSERT
+        let missing_before_write = get_setting(&conn, "ui.theme").unwrap();
+        assert!(missing_before_write.is_none());
 
-        set_setting(&conn, "theme", Some("dark")).unwrap();
-        let theme = get_setting(&conn, "theme").unwrap();
+        set_setting(&conn, "ui.theme", Some("dark")).unwrap();
+        let theme = get_setting(&conn, "ui.theme").unwrap();
         assert_eq!(theme.as_deref(), Some("dark"));
+
+        // 清空为 None 删除该行
+        set_setting(&conn, "ui.theme", None).unwrap();
+        let cleared = get_setting(&conn, "ui.theme").unwrap();
+        // set_setting(None) 会写 NULL，get_setting 读出来也是 None
+        assert!(cleared.is_none());
 
         let missing = get_setting(&conn, "nonexistent").unwrap();
         assert!(missing.is_none());

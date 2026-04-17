@@ -9,6 +9,7 @@ import SearchBar from "./SearchBar";
 import CardList from "./CardList";
 import ActionBar from "./ActionBar";
 import UndoToast from "./UndoToast";
+import { enterHintLabel } from "../lib/platform";
 
 export default function PanelApp() {
   const panel = usePanel();
@@ -150,7 +151,7 @@ export default function PanelApp() {
         <kbd className="px-1 py-0.5 bg-white border border-stone-200 rounded text-[9px]">↑↓</kbd>
         <span>选择</span>
         <kbd className="px-1 py-0.5 bg-white border border-stone-200 rounded text-[9px]">Enter</kbd>
-        <span>复制并关闭</span>
+        <span>{enterHintLabel}</span>
         <kbd className="px-1 py-0.5 bg-white border border-stone-200 rounded text-[9px]">Del</kbd>
         <span>忘记</span>
         <kbd className="px-1 py-0.5 bg-white border border-stone-200 rounded text-[9px]">Esc</kbd>

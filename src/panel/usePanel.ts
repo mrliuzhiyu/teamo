@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import type { ClipboardRow, TodayStats } from "./types";
 
@@ -193,13 +194,20 @@ export function usePanel(): PanelState {
 
   useEffect(() => {
     const win = getCurrentWebviewWindow();
+    const queryRef = { current: query };
+    queryRef.current = query;
+
     const unlistenPromise = win.onFocusChanged(({ payload: focused }) => {
       if (focused) {
-        // 只刷新元信息（stats/暂停状态），**不刷 list**。
-        // 如果用户正在搜索，refresh→loadRecent 会覆盖搜索结果导致状态不一致
-        // （搜索框仍显示 query，列表却变回最近 20 条）。
+        // focus 时刷新 stats + 暂停状态（轻量，必刷）
         void loadStats();
         void loadPauseState();
+        // 列表：仅当用户没在搜索时才刷新。
+        // 正在搜索时刷 list 会把搜索结果覆盖成最近 20 条，query 却还显示在搜索框 → 不一致。
+        // query 为空时 list 展示的是"最近 20 条"，此时刷新能让新 capture 的内容显示出来。
+        if (!queryRef.current.trim()) {
+          void loadRecent();
+        }
       } else {
         // 失焦时立即 flush pending forget，避免 5s 窗口横跨会话
         void flushPending();
@@ -208,7 +216,20 @@ export function usePanel(): PanelState {
     return () => {
       void unlistenPromise.then((un) => un());
     };
-  }, [loadStats, loadPauseState, flushPending]);
+  }, [loadStats, loadPauseState, loadRecent, flushPending, query]);
+
+  // 清空数据事件监听：Settings 页点"清空本地数据"成功后 emit `data:cleared`，
+  // panel 如果正开着就刷新列表（否则下次 mount 自然 fresh）
+  useEffect(() => {
+    const unlistenPromise = listen<void>("data:cleared", () => {
+      setList([]);
+      setSelectedIndex(0);
+      void loadStats();
+    });
+    return () => {
+      void unlistenPromise.then((un) => un());
+    };
+  }, [loadStats]);
 
   return {
     list,

@@ -2,6 +2,7 @@
 
 use crate::clipboard::CaptureState;
 use crate::export::{self, ExportFormat, ExportResult};
+use crate::settings_keys;
 use crate::storage::{self, repository};
 use crate::window::platform::{self, PrevForeground};
 use std::path::PathBuf;
@@ -165,9 +166,17 @@ pub fn do_pause_capture(state: &AppState, minutes: Option<u64>) {
     let conn = state.db.conn();
     if let Some(mins) = minutes {
         let until = chrono_now_ms() + (mins as i64 * 60 * 1000);
-        let _ = repository::set_setting(&conn, "paused_until", Some(&until.to_string()));
+        let _ = repository::set_setting(
+            &conn,
+            settings_keys::CAPTURE_PAUSED_UNTIL,
+            Some(&until.to_string()),
+        );
     } else {
-        let _ = repository::set_setting(&conn, "paused_until", Some("manual"));
+        let _ = repository::set_setting(
+            &conn,
+            settings_keys::CAPTURE_PAUSED_UNTIL,
+            Some("manual"),
+        );
     }
 
     tracing::info!("Capture paused for {:?} minutes", minutes);
@@ -177,7 +186,7 @@ pub fn do_pause_capture(state: &AppState, minutes: Option<u64>) {
 pub fn do_resume_capture(state: &AppState) {
     state.capture.resume();
     let conn = state.db.conn();
-    let _ = repository::set_setting(&conn, "paused_until", None);
+    let _ = repository::set_setting(&conn, settings_keys::CAPTURE_PAUSED_UNTIL, None);
     tracing::info!("Capture resumed");
 }
 
@@ -256,9 +265,14 @@ pub fn get_data_info(state: State<'_, AppState>) -> Result<DataInfo, String> {
 
 /// 清空全部本地数据：删除 clipboard_local 所有行 + 删除 images/ 下全部文件
 ///
-/// 危险操作！前端必须做二次确认后才调用。
+/// 危险操作！前端必须做二次确认后才调用。完成后 emit `data:cleared` event，
+/// 让 panel（如果正开着）立即刷新列表——避免"清完数据 panel 里还显示旧条目"的
+/// UX 不一致。
 #[tauri::command]
-pub fn clear_all_data(state: State<'_, AppState>) -> Result<(), String> {
+pub fn clear_all_data(
+    state: State<'_, AppState>,
+    app: tauri::AppHandle,
+) -> Result<(), String> {
     {
         let conn = state.db.conn();
         conn.execute("DELETE FROM clipboard_local", [])
@@ -276,6 +290,11 @@ pub fn clear_all_data(state: State<'_, AppState>) -> Result<(), String> {
                 let _ = std::fs::remove_file(entry.path());
             }
         }
+    }
+
+    use tauri::Emitter;
+    if let Err(e) = app.emit("data:cleared", ()) {
+        tracing::warn!("failed to emit data:cleared event: {e}");
     }
 
     tracing::info!("All clipboard data cleared");

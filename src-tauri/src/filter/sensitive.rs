@@ -11,37 +11,46 @@
 
 use once_cell::sync::Lazy;
 use regex::Regex;
+use rusqlite::Connection;
 
 use super::idcard::check_id_card;
 use super::luhn::check_luhn;
 use super::SensitiveType;
+use crate::settings_keys;
 
 /// 入口：检测内容是否触发任一敏感类型。
-pub fn detect(content: &str) -> Option<SensitiveType> {
+///
+/// 每个 detector 跑前先查对应 `sens.*` 开关（默认全开）。关闭的 detector 跳过，
+/// 不会影响其他 detector 的优先级判断。
+pub fn detect(conn: &Connection, content: &str) -> Option<SensitiveType> {
     let trimmed = content.trim();
     if trimmed.is_empty() || trimmed.len() > 10_000 {
         return None;
     }
 
-    if detect_token(trimmed) {
+    if sens_enabled(conn, settings_keys::SENS_TOKEN) && detect_token(trimmed) {
         return Some(SensitiveType::Token);
     }
-    if detect_id_card(trimmed) {
+    if sens_enabled(conn, settings_keys::SENS_ID_CARD) && detect_id_card(trimmed) {
         return Some(SensitiveType::IdCard);
     }
-    if detect_credit_card(trimmed) {
+    if sens_enabled(conn, settings_keys::SENS_CREDIT_CARD) && detect_credit_card(trimmed) {
         return Some(SensitiveType::CreditCard);
     }
-    if detect_phone(trimmed) {
+    if sens_enabled(conn, settings_keys::SENS_PHONE) && detect_phone(trimmed) {
         return Some(SensitiveType::Phone);
     }
-    if detect_email(trimmed) {
+    if sens_enabled(conn, settings_keys::SENS_EMAIL) && detect_email(trimmed) {
         return Some(SensitiveType::Email);
     }
-    if detect_password(trimmed) {
+    if sens_enabled(conn, settings_keys::SENS_PASSWORD) && detect_password(trimmed) {
         return Some(SensitiveType::Password);
     }
     None
+}
+
+fn sens_enabled(conn: &Connection, key: &str) -> bool {
+    settings_keys::read_bool_flag(conn, key, true)
 }
 
 // ── Token（API key / JWT / Slack / GitHub） ──
@@ -159,13 +168,28 @@ fn detect_password(s: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::storage::schema;
+
+    fn setup_db() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch("PRAGMA journal_mode=WAL;").unwrap();
+        schema::run_migrations(&conn).unwrap();
+        conn
+    }
+
+    /// Helper：默认全开（所有 sens.* 开关为默认 on）状态下跑 detect。
+    /// 保持原有 tests 的简洁签名。测"开关关闭"的 case 单独用 detect(&conn, ...) 走全路径。
+    fn detect_content(s: &str) -> Option<SensitiveType> {
+        let conn = setup_db();
+        detect(&conn, s)
+    }
 
     // ── Token ──
 
     #[test]
     fn test_detect_openai_key() {
         assert_eq!(
-            detect("sk-abc123def456ghi789jklmnopqrstuvwx"),
+            detect_content("sk-abc123def456ghi789jklmnopqrstuvwx"),
             Some(SensitiveType::Token)
         );
     }
@@ -173,7 +197,7 @@ mod tests {
     #[test]
     fn test_detect_github_pat() {
         assert_eq!(
-            detect("ghp_1234567890abcdefghijklmnopqrstuvwxyz"),
+            detect_content("ghp_1234567890abcdefghijklmnopqrstuvwxyz"),
             Some(SensitiveType::Token)
         );
     }
@@ -181,7 +205,7 @@ mod tests {
     #[test]
     fn test_detect_bearer() {
         assert_eq!(
-            detect("Bearer eyJhbGciOiJIUzI1NiJ9.abcdefghij"),
+            detect_content("Bearer eyJhbGciOiJIUzI1NiJ9.abcdefghij"),
             Some(SensitiveType::Token)
         );
     }
@@ -189,7 +213,7 @@ mod tests {
     #[test]
     fn test_detect_jwt() {
         assert_eq!(
-            detect("eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c"),
+            detect_content("eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c"),
             Some(SensitiveType::Token)
         );
     }
@@ -198,13 +222,13 @@ mod tests {
 
     #[test]
     fn test_detect_visa() {
-        assert_eq!(detect("4111111111111111"), Some(SensitiveType::CreditCard));
+        assert_eq!(detect_content("4111111111111111"), Some(SensitiveType::CreditCard));
     }
 
     #[test]
     fn test_detect_visa_with_spaces() {
         assert_eq!(
-            detect("4111 1111 1111 1111"),
+            detect_content("4111 1111 1111 1111"),
             Some(SensitiveType::CreditCard)
         );
     }
@@ -212,7 +236,7 @@ mod tests {
     #[test]
     fn test_detect_visa_with_dashes() {
         assert_eq!(
-            detect("4111-1111-1111-1111"),
+            detect_content("4111-1111-1111-1111"),
             Some(SensitiveType::CreditCard)
         );
     }
@@ -220,7 +244,7 @@ mod tests {
     #[test]
     fn test_not_credit_card_luhn_fail() {
         // 16 位数字但 Luhn 失败 → 不判为银行卡
-        let result = detect("1234567890123456");
+        let result = detect_content("1234567890123456");
         assert_ne!(result, Some(SensitiveType::CreditCard));
     }
 
@@ -228,12 +252,12 @@ mod tests {
 
     #[test]
     fn test_detect_id_card() {
-        assert_eq!(detect("11010519491231002X"), Some(SensitiveType::IdCard));
+        assert_eq!(detect_content("11010519491231002X"), Some(SensitiveType::IdCard));
     }
 
     #[test]
     fn test_not_id_card_bad_checksum() {
-        let result = detect("110105194912310021");
+        let result = detect_content("110105194912310021");
         assert_ne!(result, Some(SensitiveType::IdCard));
     }
 
@@ -241,13 +265,13 @@ mod tests {
 
     #[test]
     fn test_detect_phone() {
-        assert_eq!(detect("13800138000"), Some(SensitiveType::Phone));
+        assert_eq!(detect_content("13800138000"), Some(SensitiveType::Phone));
     }
 
     #[test]
     fn test_not_phone_landline() {
         // 座机号码（010-12345678）不应该当手机
-        let result = detect("010-12345678");
+        let result = detect_content("010-12345678");
         assert_ne!(result, Some(SensitiveType::Phone));
     }
 
@@ -255,13 +279,13 @@ mod tests {
 
     #[test]
     fn test_detect_email() {
-        assert_eq!(detect("user@example.com"), Some(SensitiveType::Email));
+        assert_eq!(detect_content("user@example.com"), Some(SensitiveType::Email));
     }
 
     #[test]
     fn test_detect_email_in_sentence() {
         assert_eq!(
-            detect("Contact me at user@example.com for details"),
+            detect_content("Contact me at user@example.com for details"),
             Some(SensitiveType::Email)
         );
     }
@@ -270,49 +294,49 @@ mod tests {
 
     #[test]
     fn test_detect_password_strong() {
-        assert_eq!(detect("Aa1@bcdefg"), Some(SensitiveType::Password));
+        assert_eq!(detect_content("Aa1@bcdefg"), Some(SensitiveType::Password));
     }
 
     #[test]
     fn test_detect_password_mixed() {
-        assert_eq!(detect("MyP@ss123!"), Some(SensitiveType::Password));
+        assert_eq!(detect_content("MyP@ss123!"), Some(SensitiveType::Password));
     }
 
     #[test]
     fn test_not_password_weak_single_class() {
         // 纯小写 → 类别 1，不满足
-        assert_eq!(detect("abcdefghij"), None);
+        assert_eq!(detect_content("abcdefghij"), None);
     }
 
     #[test]
     fn test_not_password_common_weak() {
         // password 纯小写 → 类别 1
-        assert_eq!(detect("password"), None);
+        assert_eq!(detect_content("password"), None);
         // password123 小写+数字 → 类别 2，仍不满足 >= 3
-        assert_eq!(detect("password123"), None);
+        assert_eq!(detect_content("password123"), None);
     }
 
     #[test]
     fn test_not_password_has_whitespace() {
         // 含空格不算密码（自然语言）
-        assert_eq!(detect("hello World 123!"), None);
+        assert_eq!(detect_content("hello World 123!"), None);
     }
 
     #[test]
     fn test_not_password_too_short() {
-        assert_eq!(detect("Aa1@"), None);
+        assert_eq!(detect_content("Aa1@"), None);
     }
 
     #[test]
     fn test_not_password_natural_english() {
         // 纯自然语言句子 — 有空格直接过滤
-        assert_eq!(detect("hello world this is a test"), None);
+        assert_eq!(detect_content("hello world this is a test"), None);
     }
 
     #[test]
     fn test_not_password_url() {
         // URL 含 3 种字符类型（小写+数字+符号）长度也在 8-64，但 `://` 应该排除
-        assert_eq!(detect("https://example.com/path?q=123&id=456"), None);
+        assert_eq!(detect_content("https://example.com/path?q=123&id=456"), None);
     }
 
     // ── 优先级 ──
@@ -321,7 +345,7 @@ mod tests {
     fn test_token_before_password() {
         // sk-xxx 也符合 password 规则（混合字符类型+长），但应判为 Token
         assert_eq!(
-            detect("sk-abc123def456ghi789jklmnopqrstuvwx"),
+            detect_content("sk-abc123def456ghi789jklmnopqrstuvwx"),
             Some(SensitiveType::Token)
         );
     }
@@ -330,8 +354,8 @@ mod tests {
 
     #[test]
     fn test_empty_content() {
-        assert_eq!(detect(""), None);
-        assert_eq!(detect("   \n\t  "), None);
+        assert_eq!(detect_content(""), None);
+        assert_eq!(detect_content("   \n\t  "), None);
     }
 
     #[test]
@@ -339,6 +363,6 @@ mod tests {
         // 超过 10k 字符直接跳过检测（即便里面有 token 也不拦）
         let mut big = "x".repeat(10_001);
         big.push_str(" sk-abcdefghijklmnopqrstuvwxyz");
-        assert_eq!(detect(&big), None);
+        assert_eq!(detect_content(&big), None);
     }
 }

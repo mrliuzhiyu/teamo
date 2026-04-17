@@ -83,8 +83,23 @@ pub fn start_capture_loop(
         loop {
             std::thread::sleep(Duration::from_millis(500));
 
+            // 检查暂停。is_paused() 内部若检测到定时暂停过期会自动 resume 内存态，
+            // 这里在 resume 发生时同步把 DB 里的 capture.paused_until 也清掉，
+            // 避免"内存是未暂停 / DB 还记着过期时间"两源不一致。
+            let was_paused = capture_state
+                .paused
+                .load(std::sync::atomic::Ordering::Relaxed);
             if capture_state.is_paused() {
                 continue;
+            }
+            if was_paused {
+                // 刚刚从"暂停过期"自动恢复过来 → 清 DB
+                let conn = db.conn();
+                let _ = repository::set_setting(
+                    &conn,
+                    crate::settings_keys::CAPTURE_PAUSED_UNTIL,
+                    None,
+                );
             }
 
             // 读文本
@@ -106,7 +121,10 @@ pub fn start_capture_loop(
                 last_text_hash = Some(text_hash);
 
                 // 闸门：敏感数据 → state=local_only（不会上云），其余 captured
-                let decision = crate::filter::apply_filters(&text);
+                let decision = {
+                    let conn = db.conn();
+                    crate::filter::apply_filters(&conn, &text)
+                };
                 let id = generate_id();
                 let req = repository::InsertRequest {
                     id,

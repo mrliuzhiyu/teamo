@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import { open as openShell } from "@tauri-apps/plugin-shell";
 import { getAllWebviewWindows, getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
+import CloudCtaButton from "../lib/CloudCtaButton";
 
 interface Props {
   isPaused: boolean;
@@ -57,14 +57,6 @@ export default function ActionBar({ isPaused, onPause, onResume }: Props) {
     }
   };
 
-  const openCloud = async () => {
-    try {
-      await openShell("https://textview.cn");
-    } catch (e) {
-      console.error("open cloud failed", e);
-    }
-  };
-
   return (
     <div className="relative px-2 py-1.5 border-t border-stone-200 bg-stone-50 flex items-center gap-1 text-[11px]">
       <div ref={menuRef} className="relative">
@@ -89,13 +81,7 @@ export default function ActionBar({ isPaused, onPause, onResume }: Props) {
           </div>
         )}
       </div>
-      <button
-        onClick={openCloud}
-        className="px-2 py-1 rounded hover:bg-stone-200 text-stone-600 transition-colors"
-        title="连接 TextView 云端（即将支持）"
-      >
-        🌐 连接云端
-      </button>
+      <CloudCtaButton variant="compact" />
       <button
         onClick={openSettings}
         className="px-2 py-1 rounded hover:bg-stone-200 text-stone-600 transition-colors ml-auto"

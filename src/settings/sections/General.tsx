@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { enable, disable, isEnabled } from "@tauri-apps/plugin-autostart";
 import Section, { Row } from "../components/Section";
 import Switch from "../components/Switch";
+import { shortcutLabel } from "../../lib/platform";
 
 export default function General() {
   const [autostart, setAutostart] = useState<boolean | null>(null);
@@ -23,12 +24,6 @@ export default function General() {
       setAutostart(!v);
     }
   };
-
-  // 平台相关的快捷键显示
-  const shortcutLabel =
-    typeof navigator !== "undefined" && navigator.platform.startsWith("Mac")
-      ? "⌘⇧V"
-      : "Ctrl+Shift+V";
 
   return (
     <Section

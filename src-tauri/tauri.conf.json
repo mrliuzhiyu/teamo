@@ -22,7 +22,8 @@
         "fullscreen": false,
         "decorations": true,
         "transparent": false,
-        "alwaysOnTop": false
+        "alwaysOnTop": false,
+        "visible": false
       },
       {
         "label": "panel",
