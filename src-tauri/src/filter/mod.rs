@@ -16,6 +16,7 @@ pub mod entropy;
 pub mod idcard;
 pub mod luhn;
 pub mod sensitive;
+pub mod url_match;
 
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
@@ -90,16 +91,26 @@ impl FilterDecision {
             sensitive_type: None,
         }
     }
+
+    pub fn blocked_domain(pattern: &str) -> Self {
+        Self {
+            state: "local_only".to_string(),
+            blocked_reason: Some(format!("domain_skip_upload:{pattern}")),
+            sensitive_type: None,
+        }
+    }
 }
 
 /// 对文本内容应用所有过滤器。
 ///
-/// 优先级（架构 L1）：
+/// 优先级（架构 L1 的子集，按"早出"原则排序）：
 /// 1. **App 白名单**命中 → 直接 captured，跳过所有后续（信任用户对白名单 App 的选择）
-/// 2. **App 黑名单**命中 → local_only:app_blacklist（例如 1Password/银行客户端）
-/// 3. 短文本（非 URL）→ local_only:short_text
-/// 4. 敏感检测 6 类 → local_only:sensitive:*
-/// 5. 其余 → captured
+/// 2. **App 黑名单**命中 → local_only:app_blacklist
+/// 3. **URL domain_rules** skip_upload 命中 → local_only:domain_skip_upload
+///    （skip_parse / parse_as_content 仅云端用，Phase 1 不影响 state）
+/// 4. 短文本（非 URL）→ local_only:short_text
+/// 5. 敏感检测 6 类 → local_only:sensitive:*
+/// 6. 其余 → captured
 pub fn apply_filters(
     conn: &Connection,
     content: &str,
@@ -112,6 +123,23 @@ pub fn apply_filters(
                 "whitelist" => return FilterDecision::captured(), // 白名单直接放行
                 "blacklist" => return FilterDecision::blocked_app(app),
                 _ => {}
+            }
+        }
+    }
+
+    // L1.4 URL domain_rules（content 是 URL 时才跑，降低无谓开销）
+    if let Some(parsed_url) = url_match::extract_url(content) {
+        let haystack = url_match::haystack(&parsed_url);
+        if let Ok(rules) = crate::storage::repository::list_domain_rules(conn) {
+            // 规则已按 priority DESC 排序，高优命中先
+            for rule in rules {
+                if url_match::pattern_matches(&rule.pattern, &haystack) {
+                    if rule.rule_type == "skip_upload" {
+                        return FilterDecision::blocked_domain(&rule.pattern);
+                    }
+                    // skip_parse / parse_as_content 仅云端侧（Phase 3 上云时读）
+                    // 这里不影响 state，continue 看更低优先级是否有其他 skip_upload 命中
+                }
             }
         }
     }
@@ -300,6 +328,105 @@ mod tests {
         crate::storage::repository::add_app_rule(&conn, "chrome.exe", "blacklist").unwrap();
         // source_app=None（非 Windows / 抓取失败）→ 跳过 app_rules 检查
         let d = apply_filters(&conn, "some content", None);
+        assert_eq!(d.state, "captured");
+    }
+
+    // ── URL domain_rules ──
+
+    #[test]
+    fn test_domain_skip_upload_bank() {
+        let conn = setup_db();
+        crate::storage::repository::bulk_insert_domain_rules(
+            &conn,
+            &[("*.cmbchina.com/*".to_string(), "skip_upload".to_string(), 200)],
+            "builtin",
+        )
+        .unwrap();
+        let d = apply_filters(&conn, "https://personal.cmbchina.com/login", None);
+        assert_eq!(d.state, "local_only");
+        assert!(d
+            .blocked_reason
+            .as_deref()
+            .unwrap_or("")
+            .starts_with("domain_skip_upload:"));
+    }
+
+    #[test]
+    fn test_domain_skip_upload_login_wildcard() {
+        let conn = setup_db();
+        crate::storage::repository::bulk_insert_domain_rules(
+            &conn,
+            &[("*/login".to_string(), "skip_upload".to_string(), 200)],
+            "builtin",
+        )
+        .unwrap();
+        let d = apply_filters(&conn, "https://example.com/login", None);
+        assert_eq!(d.state, "local_only");
+    }
+
+    #[test]
+    fn test_domain_skip_upload_localhost() {
+        let conn = setup_db();
+        crate::storage::repository::bulk_insert_domain_rules(
+            &conn,
+            &[("localhost*".to_string(), "skip_upload".to_string(), 200)],
+            "builtin",
+        )
+        .unwrap();
+        let d = apply_filters(&conn, "http://localhost:3000/admin", None);
+        assert_eq!(d.state, "local_only");
+    }
+
+    #[test]
+    fn test_domain_parse_as_content_does_not_block() {
+        let conn = setup_db();
+        crate::storage::repository::bulk_insert_domain_rules(
+            &conn,
+            &[("v.douyin.com/*".to_string(), "parse_as_content".to_string(), 100)],
+            "builtin",
+        )
+        .unwrap();
+        // parse_as_content 命中不影响 state，仍 captured
+        let d = apply_filters(&conn, "https://v.douyin.com/abc", None);
+        assert_eq!(d.state, "captured");
+    }
+
+    #[test]
+    fn test_non_url_content_skips_domain_rules() {
+        let conn = setup_db();
+        crate::storage::repository::bulk_insert_domain_rules(
+            &conn,
+            &[("*/login".to_string(), "skip_upload".to_string(), 200)],
+            "builtin",
+        )
+        .unwrap();
+        // 普通文本包含 "login" 字样但不是 URL → 不命中 domain_rules
+        let d = apply_filters(&conn, "my login is Alice", None);
+        // 注意 content 可能被敏感/短文本命中，我们只断言"不是 domain 原因"
+        assert!(d
+            .blocked_reason
+            .as_deref()
+            .unwrap_or("captured")
+            .find("domain_")
+            .is_none());
+    }
+
+    #[test]
+    fn test_app_whitelist_overrides_domain_skip() {
+        let conn = setup_db();
+        crate::storage::repository::add_app_rule(&conn, "MyTrusted.exe", "whitelist").unwrap();
+        crate::storage::repository::bulk_insert_domain_rules(
+            &conn,
+            &[("*/login".to_string(), "skip_upload".to_string(), 200)],
+            "builtin",
+        )
+        .unwrap();
+        // 白名单应用 + domain 命中 skip_upload → 白名单优先级更高
+        let d = apply_filters(
+            &conn,
+            "https://example.com/login",
+            Some("MyTrusted.exe"),
+        );
         assert_eq!(d.state, "captured");
     }
 }

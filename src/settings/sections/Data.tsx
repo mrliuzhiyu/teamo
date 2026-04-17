@@ -3,15 +3,28 @@ import { invoke } from "@tauri-apps/api/core";
 import { open as openShell } from "@tauri-apps/plugin-shell";
 import { save as saveDialog } from "@tauri-apps/plugin-dialog";
 import Section, { Row } from "../components/Section";
-import { formatBytes, useDataInfo } from "../useSettings";
+import { formatBytes, useDataInfo, useSetting } from "../useSettings";
+import { DATA_RETENTION, DATA_RETENTION_DEFAULT } from "../../lib/settings-keys";
+
+const RETENTION_OPTIONS: Array<{ value: string; label: string; hint: string }> = [
+  { value: "forever", label: "永久", hint: "不自动清理（默认）" },
+  { value: "1y", label: "最近 1 年", hint: "超过 1 年的记录启动时自动清除" },
+  { value: "6m", label: "最近 6 月", hint: "超过 6 个月的记录启动时自动清除" },
+  { value: "1m", label: "最近 1 月", hint: "超过 30 天的记录启动时自动清除" },
+];
 
 type ExportStatus = null | { tone: "ok" | "err"; text: string };
 
 export default function Data() {
   const { info, refresh } = useDataInfo();
+  const [retention, setRetention] = useSetting(DATA_RETENTION, DATA_RETENTION_DEFAULT);
   const [exportStatus, setExportStatus] = useState<ExportStatus>(null);
   const [exporting, setExporting] = useState(false);
   const [clearing, setClearing] = useState(false);
+
+  const retentionHint =
+    RETENTION_OPTIONS.find((o) => o.value === retention)?.hint ??
+    "下次启动时生效";
 
   const openDir = async () => {
     if (!info) return;
@@ -100,8 +113,18 @@ export default function Data() {
           刷新
         </button>
       </Row>
-      <Row label="保留时长" hint="自动清理超出时长的老数据（Phase 2 启用）">
-        <span className="text-[11px] text-stone-400">永久</span>
+      <Row label="保留时长" hint={retentionHint}>
+        <select
+          value={retention}
+          onChange={(e) => void setRetention(e.target.value)}
+          className="text-[11px] px-2 py-1 bg-white border border-stone-200 rounded focus:outline-none focus:border-stone-400"
+        >
+          {RETENTION_OPTIONS.map((opt) => (
+            <option key={opt.value} value={opt.value}>
+              {opt.label}
+            </option>
+          ))}
+        </select>
       </Row>
       <Row label="导出全部数据" hint="JSON 或 Markdown + 图片副本">
         <div className="flex items-center gap-2">

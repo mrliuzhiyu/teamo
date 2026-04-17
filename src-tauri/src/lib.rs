@@ -111,6 +111,25 @@ pub fn run() {
                     .expect("failed to initialize database"),
             );
 
+            // 2b. 首次启动 seed 内置 domain_rules（70+ 条 YAML 规则）
+            {
+                let conn = db.conn();
+                if let Err(e) = storage::seed_rules::seed_if_empty(&conn) {
+                    tracing::warn!("seed domain_rules failed: {e}");
+                }
+            }
+
+            // 2c. 启动时清理过期数据（按 data.retention 设置）
+            {
+                let conn = db.conn();
+                let images_dir = db.images_dir();
+                match storage::retention::prune_expired(&conn, &images_dir) {
+                    Ok(n) if n > 0 => tracing::info!("pruned {n} expired entries on startup"),
+                    Ok(_) => {}
+                    Err(e) => tracing::warn!("retention prune failed: {e}"),
+                }
+            }
+
             // 3. 初始化捕获状态（检查是否有持久化的暂停状态）
             let capture_state = Arc::new(clipboard::CaptureState::new());
             {

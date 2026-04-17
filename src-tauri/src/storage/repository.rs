@@ -451,6 +451,93 @@ pub fn app_rule_match(
 }
 
 // ══════════════════════════════════════════════════════════════════
+// domain_rules · URL 域名规则
+// ══════════════════════════════════════════════════════════════════
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DomainRule {
+    pub id: i64,
+    pub pattern: String,
+    /// "parse_as_content" | "skip_parse" | "skip_upload"
+    pub rule_type: String,
+    pub priority: i64,
+    /// "builtin" | "cloud" | "user"
+    pub source: String,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+fn row_to_domain_rule(row: &rusqlite::Row<'_>) -> Result<DomainRule, rusqlite::Error> {
+    Ok(DomainRule {
+        id: row.get(0)?,
+        pattern: row.get(1)?,
+        rule_type: row.get(2)?,
+        priority: row.get(3)?,
+        source: row.get(4)?,
+        created_at: row.get(5)?,
+        updated_at: row.get(6)?,
+    })
+}
+
+/// 列出所有 domain_rules（按 priority 降序，便于匹配时优先高优）
+pub fn list_domain_rules(conn: &Connection) -> Result<Vec<DomainRule>, rusqlite::Error> {
+    let mut stmt = conn.prepare(
+        "SELECT id, pattern, rule_type, priority, source, created_at, updated_at
+         FROM domain_rules
+         ORDER BY priority DESC, id ASC",
+    )?;
+    let rows = stmt
+        .query_map([], row_to_domain_rule)?
+        .filter_map(|r| r.ok())
+        .collect();
+    Ok(rows)
+}
+
+/// builtin 规则计数（用于 seed 判断是否已导入）
+pub fn count_domain_rules_by_source(
+    conn: &Connection,
+    source: &str,
+) -> Result<i64, rusqlite::Error> {
+    conn.query_row(
+        "SELECT COUNT(*) FROM domain_rules WHERE source = ?1",
+        params![source],
+        |row| row.get(0),
+    )
+}
+
+/// 批量插入 builtin 规则（seed 用）
+pub fn bulk_insert_domain_rules(
+    conn: &Connection,
+    rules: &[(String, String, i64)], // (pattern, rule_type, priority)
+    source: &str,
+) -> Result<usize, rusqlite::Error> {
+    let tx = conn.unchecked_transaction()?;
+    let mut stmt = tx.prepare(
+        "INSERT INTO domain_rules (pattern, rule_type, priority, source) VALUES (?1, ?2, ?3, ?4)",
+    )?;
+    let mut count = 0usize;
+    for (pattern, rule_type, priority) in rules {
+        stmt.execute(params![pattern, rule_type, priority, source])?;
+        count += 1;
+    }
+    drop(stmt);
+    tx.commit()?;
+    Ok(count)
+}
+
+/// 删除指定 source 的全部规则（比如清空 builtin 重 seed 新版本时用）
+pub fn delete_domain_rules_by_source(
+    conn: &Connection,
+    source: &str,
+) -> Result<usize, rusqlite::Error> {
+    let affected = conn.execute(
+        "DELETE FROM domain_rules WHERE source = ?1",
+        params![source],
+    )?;
+    Ok(affected)
+}
+
+// ══════════════════════════════════════════════════════════════════
 // settings · 桌面端配置
 // ══════════════════════════════════════════════════════════════════
 

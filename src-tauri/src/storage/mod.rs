@@ -4,7 +4,9 @@
 
 pub mod canonicalize;
 pub mod repository;
+pub mod retention;
 pub mod schema;
+pub mod seed_rules;
 
 use rusqlite::Connection;
 use std::path::PathBuf;
