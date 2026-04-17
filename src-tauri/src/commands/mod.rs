@@ -1,8 +1,10 @@
 // Tauri commands · 前端可调用的 Rust 函数入口
 
 use crate::clipboard::CaptureState;
+use crate::export::{self, ExportFormat, ExportResult};
 use crate::storage::{self, repository};
 use crate::window::platform::{self, PrevForeground};
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 use tauri::State;
@@ -199,6 +201,22 @@ pub fn is_capture_paused(
     state: State<'_, AppState>,
 ) -> bool {
     state.capture.is_paused()
+}
+
+// ── 数据导出 ──
+
+/// 导出 clipboard_local 全部数据 + 图片到 target_dir/teamo-export-YYYYMMDD-HHMMSS/
+///
+/// Phase 1 同步实现（可能阻塞 tauri async worker 几秒，10w 条数据量级）。
+/// Phase 2 改 tokio::task::spawn_blocking + 进度 event。
+#[tauri::command]
+pub fn export_data(
+    state: State<'_, AppState>,
+    format: ExportFormat,
+    target_dir: String,
+) -> Result<ExportResult, String> {
+    let target = PathBuf::from(target_dir);
+    export::export_data(&state.db, format, &target)
 }
 
 // ── 设置 ──

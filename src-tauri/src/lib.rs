@@ -8,6 +8,7 @@
 
 mod clipboard;
 mod commands;
+mod export;
 mod filter;
 mod storage;
 mod tray;
@@ -78,6 +79,7 @@ pub fn run() {
             commands::get_clipboard_detail,
             commands::get_today_stats,
             commands::copy_image_to_clipboard,
+            commands::export_data,
             commands::paste_to_previous,
             commands::forget_clipboard,
             commands::pause_capture,
