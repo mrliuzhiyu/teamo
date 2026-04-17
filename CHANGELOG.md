@@ -8,13 +8,14 @@
 - v0.1 发布前检查：实机验证、Windows/macOS 安装包构建、签名策略确认
 - 宣传渠道稿件：V2EX、即刻、HN、Twitter、朋友圈
 
-### Phase 2 规划
-- App 黑白名单（平台 API 抓 bundle_id / exe_name）
-- 域名规则生效（70+ 条 YAML seed 加载进 DB）
-- macOS NSPanel（无 Dock + 不抢焦点）+ macOS 系统粘贴（CGEvent）
-- Tray 状态色动态切换 + 动态 tooltip 统计
-- 主题切换（深色模式）+ 短文本最小长度 + 保留时长
+### Phase 2-3 规划
+- macOS NSPanel（无 Dock + 不抢焦点）+ macOS 系统粘贴（CGEvent）+ NSWorkspace source_app 抓取
+- Tray 状态色动态切换（4 色图标）+ 动态 tooltip 统计
+- 主题切换（深色模式 Tailwind dark class + CSS 变量）
+- 快捷键可配置（Settings 改 hotkey_panel 键）
 - 导出进度条 + 取消按钮（tokio 后台任务 + event）
+- 检查更新 endpoint 配置
+- Tray "Capture: Dead" UI 显示（后端心跳已就位）
 
 ## [0.1.0-alpha] - 2026-MM-DD（待发布）
 
@@ -69,26 +70,58 @@
 #### 设置页（settings-page）
 - 5 区纵向滚动：通用 / 隐私 / 云端 / 数据 / 关于
 - **通用**：开机自启动开关（`plugin-autostart`）+ 分平台快捷键展示（⌘⇧V vs Ctrl+Shift+V）
-- **隐私**：6 个敏感类型开关持久化；App 黑白名单 Phase 2
+- **隐私**：6 个敏感类型开关持久化（真生效）；App 黑白名单 CRUD（输入框 + 抓当前 App + 黑/白分组列表 + × 删除）
 - **云端**：未登录引导卡片 + 「连接 TextView 云端（即将支持）」+ 了解链接
-- **数据**：路径显示 + 打开文件管理器 + DB/图片字节统计 + JSON/MD 导出 + 清空（二次确认）
+- **数据**：路径显示 + 打开文件管理器 + DB/图片字节统计 + JSON/MD 导出 + 保留时长下拉 + 清空（二次确认）
 - **关于**：版本号 + AGPL-3.0 / GitHub / Issues 外链
+
+#### App 黑白名单生效（filter-engine Phase 2A）
+- Windows source_app 抓取：`GetForegroundWindow` → `OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION)` → `GetModuleFileNameExW`，动态 buffer doubling 到 32768 支持 long-path
+- Teamo 自身进程过滤（pid == GetCurrentProcessId）
+- **`<elevated>` 哨兵**：OpenProcess 被拒（管理员进程 / 受保护进程）返哨兵而非 None，filter 对哨兵采保守策略（用户已配 blacklist 则视同黑名单，否则透明）。修复"KeePass 以管理员运行时黑名单 bypass"的 silent-failure
+- filter::apply_filters L1.2 White/Blacklist → captured / blocked_app
+- 文本 + 图片分支走共用 `filter::check_app_rules` 函数保持对称
+
+#### URL 域名规则生效（filter-engine Phase 2B）
+- 依赖 `url = "2.5"` + `serde_yaml = "0.9"`
+- `filter/url_match.rs`：URL 提取 + 5 种 wildcard pattern 匹配（`domain.com` / `domain.com/path/*` / `*.domain.com/*` / `*/login` / `localhost*`），regex 编译缓存
+- `storage/seed_rules.rs`：`include_str!` 嵌入 domain_rules.yaml，YAML 编译期严格验证（rule_type 白名单 + priority 范围 + 空 pattern 三重 test）
+- **版本化升级**：`filter.builtin_rules_version` settings key + YAML 顶部 `version: N`，版本 bump 时清空 builtin 重 seed（保留 user/cloud 规则）
+- `filter::apply_filters` L1.4 分支：skip_upload → local_only；`parse_as_content` / `skip_parse` 写入 `clipboard_local.matched_domain_rule`（migration 003）供 M3 云端 parse_worker 消费
+- 白名单优先级 > 域名 skip_upload（用户信任 App 可覆盖 URL 规则）
+
+#### 保留时长真清理
+- `storage/retention.rs`：forever / 1y / 6m / 1m 枚举映射毫秒 → DELETE clipboard_local WHERE captured_at < cutoff（FTS5 触发器自动同步）→ 清对应 PNG 文件
+- 启动时跑一次（lib.rs setup 第 2c 步）；Phase 2 加 tokio interval 每 6h 定时清
+- Data.tsx UI 下拉接真实 settings 读写
+
+#### 架构加固（eng review 14 修 + 4 test gap）
+- **settings key 单源**：`src-tauri/src/settings_keys.rs` + `src/lib/settings-keys.ts` 跨语言常量对齐；migration 002 值迁移（仅非默认值迁移新 key，fresh migration 表为空）
+- **filter 读 settings 真生效**：`apply_filters(conn, content, source_app)` 扩参；`filter::cache::FilterSnapshot` RwLock 单例缓存 sens.* 开关 + min_text_len + domain_rules，capture loop 0 次 DB 查询（原 9 次 / capture）；set_setting / seed 改动后 invalidate
+- **UX 共用组件**：`src/lib/platform.ts`（isMac / shortcutLabel / enterHintLabel）+ `src/lib/CloudCtaButton.tsx`
+- **Capture loop panic 自愈**：外层 supervisor `catch_unwind` + 1s 重启；`CaptureState::last_heartbeat_ms` AtomicI64 + `get_capture_health` command（Tray UI 显示 Phase 2）
+- **图片 dedup 全量 sha256**：消灭原首 4KB DefaultHasher 误判导致的"截图 silent 丢失"
+- **storage 层 thiserror StorageError**：Sqlite / Yaml / Io / Message 四 variants，seed_rules + retention 切新类型
+- **首次启动引导**：`APP_FIRST_RUN_COMPLETED` settings 标记；tauri.conf.json main window visible=false，首次 show 引导后续静默到 tray
+- **clear_all_data event 通知**：emit `data:cleared` → panel 监听秒刷新
 
 ### 代码质量与测试
 
-- **74 个 lib 单测**（filter 40+ / repository 15 / canonicalize 6 / schema 4 / export 6 等）
-- **2 轮代码 review 修 17 个 bug**：
-  - quick-panel 14 个（含严重：Teamo 自身窗口被当前景粘回自己、UndoToast "0s 撤销" race、FTS5 特殊字符抛错、focus 覆盖搜索状态）
-  - tray 2 个（严重：`app.exit` 被 CloseRequested 拦；tray 搜索菜单忘了抓前景）
-  - export 1 个（test 死锁：`db.conn()` MutexGuard 跨 export_data 调用）
+- **132 个 lib 单测**（filter 50+ / repository 20+ / settings_keys 7 / canonicalize 6 / schema 4 / seed_rules 5 / retention 4 / export 6 / platform::basename 6 / filter::cache 2）
+- **3 轮代码 review 修 31 bug + 补 4 test gap**：
+  - quick-panel 2 轮共 14（严重：Teamo 自身窗口粘回、UndoToast race、FTS5 特殊字符、focus 覆盖搜索）
+  - tray 2（严重：`app.exit` 被 CloseRequested 拦；tray 搜索忘抓前景）
+  - export 1（test 死锁：`db.conn()` MutexGuard 跨 export_data）
+  - **post-hoc eng review 14**（outside voice 捕到 5 silent-failure：elevated bypass / 图片 4KB 误判 / capture panic 静默死亡 / YAML typo 无 CI 拦 / migration 静默抹用户值；架构 5 + 质量 2：cache / thiserror / buffer doubling / DRY / 版本化 / matched_domain_rule / app 哨兵）
 
 ### 决策与限制
 
 - **未签名发布**：v0.1 不购买 EV Cert（Windows ¥3000-5000/年）/ Apple Developer ID（$99/年）；用户首次运行需手动点「仍要运行」
 - **暂不支持 Linux**：Tauri 2.x Linux 构建可行但未测试
-- **macOS Phase 1 未做 NSPanel**：macOS 下 panel 有 Dock 图标，焦点行为不完美；macOS 系统粘贴也留 Phase 2（CGEvent 需要辅助功能权限）
+- **macOS Phase 1 未做 NSPanel + 系统粘贴 + source_app 抓取**：Phase 4 一起做（CGEvent 需辅助功能权限引导 + NSWorkspace API）；Phase 1 macOS 能用但 Enter 不模拟系统粘贴 + App 黑白名单规则不生效
 - **macOS 图片 decode**：依赖 arboard 的 Windows CF_DIBV5 premultiplied alpha 处理；macOS 待测
 - **不支持导入**：JSON 含 `schema_version` 为未来导入预留，当前版本仅导出不导入
+- **source_url 抓取缺失**：只对 content 本身是 URL 的场景走 domain_rules；"银行页面复制正常文本自动拦"需要浏览器扩展 / macOS AppleScript / Windows UIA（Phase 2+）
 
 ---
 
