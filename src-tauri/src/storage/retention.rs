@@ -19,7 +19,7 @@ use std::path::Path;
 
 use crate::settings_keys;
 
-use super::repository;
+use super::{repository, StorageError};
 
 /// 把 retention 枚举值翻译成毫秒阈值。`forever` 返回 None（不清理）。
 fn retention_to_ms(retention: &str) -> Option<i64> {
@@ -33,7 +33,7 @@ fn retention_to_ms(retention: &str) -> Option<i64> {
 }
 
 /// 根据 `data.retention` 设置清理过期数据。返回删除的行数（图片也一并清）。
-pub fn prune_expired(conn: &Connection, images_dir: &Path) -> Result<usize, rusqlite::Error> {
+pub fn prune_expired(conn: &Connection, images_dir: &Path) -> Result<usize, StorageError> {
     let retention = repository::get_setting(conn, settings_keys::DATA_RETENTION)?
         .unwrap_or_else(|| settings_keys::DATA_RETENTION_DEFAULT.to_string());
 

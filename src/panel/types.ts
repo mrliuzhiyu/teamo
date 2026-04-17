@@ -18,6 +18,8 @@ export interface ClipboardRow {
   last_seen_at: number | null;
   created_at: number;
   updated_at: number;
+  /// URL 命中的 domain_rule（"parse_as_content:v.douyin.com/*" 等，可选显示）
+  matched_domain_rule: string | null;
 }
 
 export interface TodayStats {

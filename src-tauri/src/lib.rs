@@ -93,6 +93,7 @@ pub fn run() {
             commands::pause_capture,
             commands::resume_capture,
             commands::is_capture_paused,
+            commands::get_capture_health,
             commands::get_setting,
             commands::set_setting,
         ])
@@ -111,13 +112,15 @@ pub fn run() {
                     .expect("failed to initialize database"),
             );
 
-            // 2b. 首次启动 seed 内置 domain_rules（70+ 条 YAML 规则）
+            // 2b. 首次启动或 YAML 升级时 seed 内置 domain_rules（70+ 条 YAML 规则）
             {
                 let conn = db.conn();
-                if let Err(e) = storage::seed_rules::seed_if_empty(&conn) {
+                if let Err(e) = storage::seed_rules::seed_if_outdated(&conn) {
                     tracing::warn!("seed domain_rules failed: {e}");
                 }
             }
+            // 启动 seed 可能改了 domain_rules，invalidate filter cache 让 capture loop 读到新规则
+            filter::cache::invalidate();
 
             // 2c. 启动时清理过期数据（按 data.retention 设置）
             {

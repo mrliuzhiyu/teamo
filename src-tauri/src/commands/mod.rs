@@ -212,6 +212,26 @@ pub fn is_capture_paused(
     state.capture.is_paused()
 }
 
+/// Capture loop 健康状态：`(last_heartbeat_ms, seconds_since_last_beat)`
+/// - 正常运行时 seconds_since_last_beat < 2（capture loop 500ms 一圈）
+/// - > 10 秒：capture 可能死了（panic 太频繁 supervisor 撑不回来，或被暂停）
+/// - 暂停期间 heartbeat 仍会跳（暂停只是 skip 写入，不 skip 心跳）
+///
+/// Phase 1 后端就位，Tray UI 显示 "Capture: Dead" 逻辑留 Phase 2
+#[tauri::command]
+pub fn get_capture_health(state: State<'_, AppState>) -> (i64, i64) {
+    let last = state
+        .capture
+        .last_heartbeat_ms
+        .load(std::sync::atomic::Ordering::Relaxed);
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0);
+    let seconds_since = if last == 0 { -1 } else { (now - last) / 1000 };
+    (last, seconds_since)
+}
+
 // ── App 黑白名单（filter-engine 的 app_rules） ──
 
 #[tauri::command]
@@ -367,7 +387,11 @@ pub fn set_setting(
     value: Option<String>,
 ) -> Result<(), String> {
     let conn = state.db.conn();
-    repository::set_setting(&conn, &key, value.as_deref()).map_err(|e| e.to_string())
+    repository::set_setting(&conn, &key, value.as_deref()).map_err(|e| e.to_string())?;
+    // 任何 setting 改动都 invalidate filter cache（sens.* / filter.min_text_len
+    // 等可能影响 apply_filters 行为；其他 key 改动也 invalidate 无伤大雅）
+    crate::filter::cache::invalidate();
+    Ok(())
 }
 
 fn chrono_now_ms() -> i64 {

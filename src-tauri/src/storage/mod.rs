@@ -3,10 +3,13 @@
 // 职责：数据库连接管理、migration、业务读写
 
 pub mod canonicalize;
+pub mod error;
 pub mod repository;
 pub mod retention;
 pub mod schema;
 pub mod seed_rules;
+
+pub use error::StorageError;
 
 use rusqlite::Connection;
 use std::path::PathBuf;

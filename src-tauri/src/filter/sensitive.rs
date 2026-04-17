@@ -13,44 +13,47 @@ use once_cell::sync::Lazy;
 use regex::Regex;
 use rusqlite::Connection;
 
+use super::cache::FilterSnapshot;
 use super::idcard::check_id_card;
 use super::luhn::check_luhn;
 use super::SensitiveType;
-use crate::settings_keys;
 
-/// 入口：检测内容是否触发任一敏感类型。
+/// 快照版入口（apply_filters 用）—— 从预加载的 FilterSnapshot 读 sens.* 开关，
+/// 零 SQLite 查询。
 ///
-/// 每个 detector 跑前先查对应 `sens.*` 开关（默认全开）。关闭的 detector 跳过，
+/// 每个 detector 跑前先查对应开关（默认全开）。关闭的 detector 跳过，
 /// 不会影响其他 detector 的优先级判断。
-pub fn detect(conn: &Connection, content: &str) -> Option<SensitiveType> {
+pub fn detect_with_snapshot(content: &str, snap: &FilterSnapshot) -> Option<SensitiveType> {
     let trimmed = content.trim();
     if trimmed.is_empty() || trimmed.len() > 10_000 {
         return None;
     }
 
-    if sens_enabled(conn, settings_keys::SENS_TOKEN) && detect_token(trimmed) {
+    if snap.sens_token && detect_token(trimmed) {
         return Some(SensitiveType::Token);
     }
-    if sens_enabled(conn, settings_keys::SENS_ID_CARD) && detect_id_card(trimmed) {
+    if snap.sens_id_card && detect_id_card(trimmed) {
         return Some(SensitiveType::IdCard);
     }
-    if sens_enabled(conn, settings_keys::SENS_CREDIT_CARD) && detect_credit_card(trimmed) {
+    if snap.sens_credit_card && detect_credit_card(trimmed) {
         return Some(SensitiveType::CreditCard);
     }
-    if sens_enabled(conn, settings_keys::SENS_PHONE) && detect_phone(trimmed) {
+    if snap.sens_phone && detect_phone(trimmed) {
         return Some(SensitiveType::Phone);
     }
-    if sens_enabled(conn, settings_keys::SENS_EMAIL) && detect_email(trimmed) {
+    if snap.sens_email && detect_email(trimmed) {
         return Some(SensitiveType::Email);
     }
-    if sens_enabled(conn, settings_keys::SENS_PASSWORD) && detect_password(trimmed) {
+    if snap.sens_password && detect_password(trimmed) {
         return Some(SensitiveType::Password);
     }
     None
 }
 
-fn sens_enabled(conn: &Connection, key: &str) -> bool {
-    settings_keys::read_bool_flag(conn, key, true)
+/// 从 DB 加载开关后跑 detect —— 保留作为独立入口（tests 用、未来其他调用点用）
+pub fn detect(conn: &Connection, content: &str) -> Option<SensitiveType> {
+    let snap = super::cache::snapshot(conn);
+    detect_with_snapshot(content, &snap)
 }
 
 // ── Token（API key / JWT / Slack / GitHub） ──
@@ -174,6 +177,7 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
         conn.execute_batch("PRAGMA journal_mode=WAL;").unwrap();
         schema::run_migrations(&conn).unwrap();
+        super::super::cache::invalidate();
         conn
     }
 

@@ -12,6 +12,7 @@
 //! 单次调用成本：5-6 次 SQLite `get_setting` + O(n) 正则扫描。capture loop 每 500ms
 //! 最多跑一次，不阻塞其他调用。
 
+pub mod cache;
 pub mod entropy;
 pub mod idcard;
 pub mod luhn;
@@ -22,6 +23,7 @@ use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 
 use crate::settings_keys;
+use cache::FilterSnapshot;
 
 /// 敏感数据类型
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -48,8 +50,8 @@ impl SensitiveType {
     }
 }
 
-/// 闸门结果。写入 clipboard_local 的 state/blocked_reason/sensitive_type 列。
-#[derive(Debug, Clone, Serialize)]
+/// 闸门结果。写入 clipboard_local 的 state / blocked_reason / sensitive_type / matched_domain_rule 列。
+#[derive(Debug, Clone, Serialize, Default)]
 pub struct FilterDecision {
     /// `state` 列值："captured"（可上云）/ "local_only"（闸门拦截，永不上云）
     pub state: String,
@@ -57,14 +59,27 @@ pub struct FilterDecision {
     pub blocked_reason: Option<String>,
     /// 具体的敏感类型（password/token/...），未命中为 None。
     pub sensitive_type: Option<String>,
+    /// 如果 URL 命中了 domain_rules 的 `parse_as_content` / `skip_parse` 类型，
+    /// 格式为 "rule_type:pattern"（比如 "parse_as_content:v.douyin.com/*"）。
+    /// skip_upload 不写这里（状态已经是 local_only + blocked_reason）。
+    /// M3 云端 parse_worker 读此字段决定是 link_cards 解析还是跳过。
+    pub matched_domain_rule: Option<String>,
 }
 
 impl FilterDecision {
     pub fn captured() -> Self {
         Self {
             state: "captured".to_string(),
-            blocked_reason: None,
-            sensitive_type: None,
+            ..Default::default()
+        }
+    }
+
+    /// captured 但记录了 URL 命中的 domain_rule（parse_as_content / skip_parse）
+    pub fn captured_with_domain_rule(rule_type: &str, pattern: &str) -> Self {
+        Self {
+            state: "captured".to_string(),
+            matched_domain_rule: Some(format!("{rule_type}:{pattern}")),
+            ..Default::default()
         }
     }
 
@@ -73,6 +88,7 @@ impl FilterDecision {
             state: "local_only".to_string(),
             blocked_reason: Some(format!("sensitive:{}", kind.as_str())),
             sensitive_type: Some(kind.as_str().to_string()),
+            matched_domain_rule: None,
         }
     }
 
@@ -80,7 +96,7 @@ impl FilterDecision {
         Self {
             state: "local_only".to_string(),
             blocked_reason: Some("short_text".to_string()),
-            sensitive_type: None,
+            ..Default::default()
         }
     }
 
@@ -88,7 +104,7 @@ impl FilterDecision {
         Self {
             state: "local_only".to_string(),
             blocked_reason: Some(format!("app_blacklist:{app}")),
-            sensitive_type: None,
+            ..Default::default()
         }
     }
 
@@ -96,8 +112,49 @@ impl FilterDecision {
         Self {
             state: "local_only".to_string(),
             blocked_reason: Some(format!("domain_skip_upload:{pattern}")),
-            sensitive_type: None,
+            matched_domain_rule: Some(format!("skip_upload:{pattern}")),
+            ..Default::default()
         }
+    }
+}
+
+/// App 黑白名单独立查询 —— 供 text 分支（apply_filters）和 image 分支（clipboard capture）共用。
+///
+/// 返回 `Some(FilterDecision)` 表示命中规则：
+/// - 白名单 → `FilterDecision::captured()`
+/// - 黑名单 → `FilterDecision::blocked_app(app)`
+/// - elevated 哨兵 + 用户已配置任何 blacklist → 保守拦截（视同黑名单）
+///
+/// 返回 `None` 表示无规则命中，调用方继续后续 filter 层（sensitive / domain / short_text）。
+///
+/// 为什么抽出来：图片分支不跑 sensitive/domain/short_text（图片无文本内容），
+/// 但 App 黑白名单对图片也生效（1Password 截屏等）。两分支共用这一个查询点，
+/// 避免各自独立重写 `app_rule_match` 调用 + FilterDecision 构造。
+pub fn check_app_rules(conn: &Connection, source_app: Option<&str>) -> Option<FilterDecision> {
+    let app = source_app?;
+
+    // 哨兵：elevated 进程 source_app=None 会让整块 app_rules 跳过，
+    // 用户加的 "KeePass.exe 黑名单" 对 KeePass-as-admin 失效（outside voice Issue 1）。
+    // 保守策略：如果用户**配置过任何** blacklist 规则（表达了 app-level 过滤意愿），
+    // 未知来源视同黑名单；否则不打扰（不让哨兵对"从没设规则"的用户误伤）。
+    if app == crate::window::platform::ELEVATED_APP_SENTINEL {
+        let has_blacklist: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM app_rules WHERE rule_type = 'blacklist'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or(0);
+        if has_blacklist > 0 {
+            return Some(FilterDecision::blocked_app(app));
+        }
+        return None;
+    }
+
+    match crate::storage::repository::app_rule_match(conn, app).ok().flatten()?.as_str() {
+        "whitelist" => Some(FilterDecision::captured()),
+        "blacklist" => Some(FilterDecision::blocked_app(app)),
+        _ => None,
     }
 }
 
@@ -116,56 +173,53 @@ pub fn apply_filters(
     content: &str,
     source_app: Option<&str>,
 ) -> FilterDecision {
-    // L1.2 App 黑白名单（source_app 存在且命中规则时生效）
-    if let Some(app) = source_app {
-        if let Ok(Some(rule)) = crate::storage::repository::app_rule_match(conn, app) {
-            match rule.as_str() {
-                "whitelist" => return FilterDecision::captured(), // 白名单直接放行
-                "blacklist" => return FilterDecision::blocked_app(app),
-                _ => {}
-            }
-        }
+    // 从缓存取 filter 快照 —— 避免每次 capture 9 次 SQLite 查询（见 cache.rs 设计说明）
+    let snap = cache::snapshot(conn);
+
+    // L1.2 App 黑白名单（共用 check_app_rules，与 clipboard 图片分支对称。
+    // 这层不走快照：app_rules 查询是按 key 精确查，单次 SELECT 微秒级不值得缓存）
+    if let Some(decision) = check_app_rules(conn, source_app) {
+        return decision;
     }
 
     // L1.4 URL domain_rules（content 是 URL 时才跑，降低无谓开销）
+    let mut first_non_block_match: Option<(String, String)> = None; // (rule_type, pattern)
     if let Some(parsed_url) = url_match::extract_url(content) {
         let haystack = url_match::haystack(&parsed_url);
-        if let Ok(rules) = crate::storage::repository::list_domain_rules(conn) {
-            // 规则已按 priority DESC 排序，高优命中先
-            for rule in rules {
-                if url_match::pattern_matches(&rule.pattern, &haystack) {
-                    if rule.rule_type == "skip_upload" {
-                        return FilterDecision::blocked_domain(&rule.pattern);
-                    }
-                    // skip_parse / parse_as_content 仅云端侧（Phase 3 上云时读）
-                    // 这里不影响 state，continue 看更低优先级是否有其他 skip_upload 命中
+        // 规则已按 priority DESC 排序，高优命中先
+        for rule in &snap.domain_rules {
+            if url_match::pattern_matches(&rule.pattern, &haystack) {
+                if rule.rule_type == "skip_upload" {
+                    return FilterDecision::blocked_domain(&rule.pattern);
+                }
+                if first_non_block_match.is_none() {
+                    first_non_block_match =
+                        Some((rule.rule_type.clone(), rule.pattern.clone()));
                 }
             }
         }
     }
 
     // L1.5 短文本：长度 < min_text_len 且不是 URL → local_only
-    let min_len = settings_keys::read_i64(
-        conn,
-        settings_keys::FILTER_MIN_TEXT_LEN,
-        settings_keys::FILTER_MIN_TEXT_LEN_DEFAULT
-            .parse()
-            .unwrap_or(0),
-    );
-    if min_len > 0 {
+    if snap.min_text_len > 0 {
         let trimmed = content.trim();
         let char_count = trimmed.chars().count() as i64;
-        if char_count < min_len && !looks_like_url(trimmed) {
+        if char_count < snap.min_text_len && !looks_like_url(trimmed) {
             return FilterDecision::blocked_short_text();
         }
     }
 
-    // L1.3 敏感检测
-    if let Some(kind) = sensitive::detect(conn, content) {
+    // L1.3 敏感检测（用快照里的开关，避免 6 次 get_setting）
+    if let Some(kind) = sensitive::detect_with_snapshot(content, &snap) {
         return FilterDecision::blocked_sensitive(kind);
     }
 
-    FilterDecision::captured()
+    // 默认 captured —— 若前面记录了 parse_as_content / skip_parse 命中，一起写进 decision
+    if let Some((rule_type, pattern)) = first_non_block_match {
+        FilterDecision::captured_with_domain_rule(&rule_type, &pattern)
+    } else {
+        FilterDecision::captured()
+    }
 }
 
 fn looks_like_url(s: &str) -> bool {
@@ -181,7 +235,15 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
         conn.execute_batch("PRAGMA journal_mode=WAL;").unwrap();
         schema::run_migrations(&conn).unwrap();
+        // filter cache 是全局单例，跨测试会污染 —— 每次 setup 都先 invalidate
+        // 确保 apply_filters/detect 读到本 test 自己的 settings/domain_rules
+        cache::invalidate();
         conn
+    }
+
+    /// 测试里改了 settings 之后调这个确保下一次 apply_filters/detect 读新值
+    fn reload_filter_cache() {
+        cache::invalidate();
     }
 
     #[test]
@@ -226,6 +288,7 @@ mod tests {
             Some("8"),
         )
         .unwrap();
+        reload_filter_cache();
         let d = apply_filters(&conn, "hi bro", None);
         assert_eq!(d.state, "local_only");
         assert_eq!(d.blocked_reason.as_deref(), Some("short_text"));
@@ -240,6 +303,7 @@ mod tests {
             Some("50"),
         )
         .unwrap();
+        reload_filter_cache();
         let d = apply_filters(&conn, "https://a.co", None);
         assert_eq!(d.state, "captured");
     }
@@ -249,6 +313,7 @@ mod tests {
         let conn = setup_db();
         crate::storage::repository::set_setting(&conn, settings_keys::SENS_TOKEN, Some("0"))
             .unwrap();
+        reload_filter_cache();
         let d = apply_filters(&conn, "sk-abc123def456ghi789jklmnopqrstuvwx", None);
         assert_ne!(d.sensitive_type.as_deref(), Some("token"));
     }
@@ -266,6 +331,7 @@ mod tests {
         ] {
             crate::storage::repository::set_setting(&conn, key, Some("0")).unwrap();
         }
+        reload_filter_cache();
         let d = apply_filters(&conn, "user@example.com", None);
         assert_eq!(d.state, "captured");
     }
@@ -342,6 +408,7 @@ mod tests {
             "builtin",
         )
         .unwrap();
+        reload_filter_cache();
         let d = apply_filters(&conn, "https://personal.cmbchina.com/login", None);
         assert_eq!(d.state, "local_only");
         assert!(d
@@ -360,6 +427,7 @@ mod tests {
             "builtin",
         )
         .unwrap();
+        reload_filter_cache();
         let d = apply_filters(&conn, "https://example.com/login", None);
         assert_eq!(d.state, "local_only");
     }
@@ -373,6 +441,7 @@ mod tests {
             "builtin",
         )
         .unwrap();
+        reload_filter_cache();
         let d = apply_filters(&conn, "http://localhost:3000/admin", None);
         assert_eq!(d.state, "local_only");
     }

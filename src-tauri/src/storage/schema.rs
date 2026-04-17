@@ -8,6 +8,7 @@ use rusqlite::Connection;
 const MIGRATIONS: &[(i64, &str)] = &[
     (1, include_str!("migrations/001_initial.sql")),
     (2, include_str!("migrations/002_settings_keys_cleanup.sql")),
+    (3, include_str!("migrations/003_matched_domain_rule.sql")),
 ];
 
 /// 获取当前 schema 版本（schema_migrations 表不存在返回 0）

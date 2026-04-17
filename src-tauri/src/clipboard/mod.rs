@@ -7,7 +7,7 @@
 // 4. 交给 storage 层持久化
 
 use crate::storage::{self, repository};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -17,6 +17,10 @@ pub struct CaptureState {
     pub paused: AtomicBool,
     /// 暂停到期时间（None = 未暂停 / 手动暂停需手动恢复）
     pub paused_until: std::sync::Mutex<Option<Instant>>,
+    /// 心跳：capture loop 每次迭代前写入当前 Unix ms 时间戳。
+    /// Tray/health command 可读此值判断"capture 是否死了"（> 10s 无心跳 → dead）。
+    /// 初始 0 = 还没启动第一圈。
+    pub last_heartbeat_ms: AtomicI64,
 }
 
 impl CaptureState {
@@ -24,6 +28,7 @@ impl CaptureState {
         Self {
             paused: AtomicBool::new(false),
             paused_until: std::sync::Mutex::new(None),
+            last_heartbeat_ms: AtomicI64::new(0),
         }
     }
 
@@ -64,24 +69,63 @@ impl CaptureState {
 /// 使用 tauri-plugin-clipboard-manager 的 API 通过定时轮询检测变化。
 /// clipboard-master crate 在 Windows/macOS 都有平台原生 listener，但
 /// 与 Tauri 2.x 集成有 threading 问题，所以 v0.1 用轻量轮询（500ms 间隔）。
+///
+/// **Supervisor 结构**：外层 `catch_unwind` 包裹内层真正的 capture loop。
+/// 任何 panic（arboard OOM / rusqlite Mutex poison / image decode assert 等）
+/// 都被捕获后 sleep 1s 重启内层，避免 capture 线程静默死亡而用户不知道
+/// "剪切板已经好几天没记录"。`CaptureState::last_heartbeat_ms` 每次迭代
+/// 写入时间戳，未来 Tray UI 可用它显示 "Capture: Running / Dead" 状态。
 pub fn start_capture_loop(
     db: Arc<storage::AppDatabase>,
     capture_state: Arc<CaptureState>,
 ) -> std::thread::JoinHandle<()> {
-    std::thread::spawn(move || {
-        tracing::info!("Clipboard capture loop started");
-
-        let mut last_text_hash: Option<String> = None;
-        let mut clipboard = match arboard::Clipboard::new() {
-            Ok(c) => c,
-            Err(e) => {
-                tracing::error!("Failed to initialize clipboard: {e}");
+    std::thread::spawn(move || loop {
+        let db_inner = Arc::clone(&db);
+        let state_inner = Arc::clone(&capture_state);
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+            capture_loop_inner(db_inner, state_inner);
+        }));
+        match result {
+            Ok(()) => {
+                tracing::info!("Clipboard capture loop exited normally");
                 return;
             }
-        };
+            Err(panic_info) => {
+                tracing::error!(
+                    "Clipboard capture loop panicked: {panic_info:?} — restarting in 1s"
+                );
+                std::thread::sleep(Duration::from_secs(1));
+            }
+        }
+    })
+}
 
-        loop {
-            std::thread::sleep(Duration::from_millis(500));
+fn capture_loop_inner(
+    db: Arc<storage::AppDatabase>,
+    capture_state: Arc<CaptureState>,
+) {
+    tracing::info!("Clipboard capture loop started");
+
+    let mut last_text_hash: Option<String> = None;
+    let mut clipboard = match arboard::Clipboard::new() {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::error!("Failed to initialize clipboard: {e}");
+            return;
+        }
+    };
+
+    loop {
+        std::thread::sleep(Duration::from_millis(500));
+
+        // 心跳：每次迭代前记录时间戳，供 health check 判断线程是否活
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as i64)
+            .unwrap_or(0);
+        capture_state
+            .last_heartbeat_ms
+            .store(now_ms, Ordering::Relaxed);
 
             // 检查暂停。is_paused() 内部若检测到定时暂停过期会自动 resume 内存态，
             // 这里在 resume 发生时同步把 DB 里的 capture.paused_until 也清掉，
@@ -141,6 +185,7 @@ pub fn start_capture_loop(
                     state: Some(decision.state),
                     blocked_reason: decision.blocked_reason,
                     sensitive_type: decision.sensitive_type,
+                    matched_domain_rule: decision.matched_domain_rule,
                 };
 
                 let conn = db.conn();
@@ -164,16 +209,18 @@ pub fn start_capture_loop(
                     continue;
                 }
 
-                // 用像素数据的简单哈希做变化检测
-                let img_hash = {
-                    use std::collections::hash_map::DefaultHasher;
-                    use std::hash::{Hash, Hasher};
-                    let mut h = DefaultHasher::new();
-                    // 只取前 4096 字节做快速哈希（避免大图慢）
-                    let sample = &pixels[..pixels.len().min(4096)];
-                    sample.hash(&mut h);
-                    format!("{:x}", h.finish())
-                };
+                // 内存变化检测 hash —— 必须用全量 pixel 指纹防误判。
+                //
+                // 历史 bug：早期用首 4096 字节 DefaultHasher（outside voice review 发现）。
+                // 2560×1440 RGBA 截图约 14 MB，两张"顶栏都白 + 不同主体"的截图前 4KB
+                // 常常 bit-identical → 第二张被整个 continue 跳过，PNG 不写、DB 不插，
+                // 截图静默丢失。下游 repository::insert_clipboard 里的 `canonicalize + sha256`
+                // 是对 content 文本做的，救不了图片（图片的 content 是我们构造的 fingerprint 而非 pixel）。
+                //
+                // 修复：这里直接用全量 sha256。Rust sha256_hex 在现代机器上对 14MB
+                // 约 30-50ms，capture loop 500ms 轮询完全可吸收。与下面的 pixel_fingerprint
+                // 是同一个值（复用），也省一次重复 hash 运算。
+                let img_hash = repository::sha256_hex(pixels);
 
                 // 图片去重靠 hash 比较（和文本共用 last_text_hash 足够，因为同一时刻剪切板只有一种类型）
                 if last_text_hash.as_deref() == Some(&img_hash) {
@@ -198,25 +245,21 @@ pub fn start_capture_loop(
                     continue;
                 }
 
-                // image 的 dedup 指纹：用像素 SHA256 作为 content 字符串
+                // image 的 dedup 指纹：复用上方 img_hash（同为全量 pixel SHA256），
+                // 避免对 14MB 截图算 2 次 hash（大图下 30-50ms × 2 = 60-100ms 纯浪费）。
                 // 解决 bug：之前 content=None → canonicalize("") → sha256("")，所有图片共享同一 hash 误判重复
-                let pixel_fingerprint = repository::sha256_hex(pixels);
+                let pixel_fingerprint = img_hash.clone();
 
-                // 图片不扫内容；但 App 黑白名单对图片也生效（比如 1Password 截屏 → 拦）
+                // 图片不扫内容；但 App 黑白名单对图片也生效（比如 1Password 截屏 → 拦）。
+                // 走 filter::check_app_rules 共用函数，保持和文本分支对称。
                 let source_app = crate::window::platform::capture_foreground_app_name();
                 let (state, blocked_reason) = {
                     let conn = db.conn();
-                    match source_app.as_deref().and_then(|app| {
-                        repository::app_rule_match(&conn, app)
-                            .ok()
-                            .flatten()
-                            .map(|rule| (app.to_string(), rule))
-                    }) {
-                        Some((app, rule)) if rule == "blacklist" => (
-                            Some("local_only".to_string()),
-                            Some(format!("app_blacklist:{app}")),
-                        ),
-                        // 白名单不需要特别标记（默认 captured 状态即可）
+                    match crate::filter::check_app_rules(&conn, source_app.as_deref()) {
+                        Some(decision) if decision.state == "local_only" => {
+                            (Some(decision.state), decision.blocked_reason)
+                        }
+                        // 白名单（captured）或无命中：都走默认，不写 state/blocked_reason
                         _ => (None, None),
                     }
                 };
@@ -231,6 +274,7 @@ pub fn start_capture_loop(
                     state,
                     blocked_reason,
                     sensitive_type: None,
+                    matched_domain_rule: None, // 图片无 URL，此字段永远 None
                 };
 
                 let conn = db.conn();
@@ -240,7 +284,6 @@ pub fn start_capture_loop(
                 }
             }
         }
-    })
 }
 
 /// 生成简单 UUID（v4 格式，不引 uuid crate）

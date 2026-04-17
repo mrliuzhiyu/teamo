@@ -53,6 +53,13 @@ pub fn capture_foreground() -> Option<ForegroundHandle> {
     }
 }
 
+/// 哨兵名：前景进程以更高权限运行（管理员/LocalSystem/受保护进程），Teamo 的
+/// `OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION)` 被拒 → 拿不到 exe 路径。
+/// 不返 None（None 会让 filter 整块跳过 app_rules 黑白名单，**用户加了 KeePass.exe
+/// 到黑名单但 KeePass 以管理员跑时密码照样入库** —— 典型 silent fail）。
+/// 返这个哨兵让 `filter::check_app_rules` 按"保守默认"处理（未知来源视同黑名单）。
+pub const ELEVATED_APP_SENTINEL: &str = "<elevated>";
+
 /// 抓取当前前景 App 的可识别名（Windows 下是 exe basename，例如 `Chrome.exe`）。
 ///
 /// 供 filter-engine 的 app_rules 黑白名单匹配 + 写入 clipboard_local.source_app 列。
@@ -60,6 +67,8 @@ pub fn capture_foreground() -> Option<ForegroundHandle> {
 ///
 /// - Windows：`GetForegroundWindow` → pid → `OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION)`
 ///   → `GetModuleFileNameExW` 拿完整路径 → 取 basename
+///   - OpenProcess 失败（elevated / protected process）→ 返 `ELEVATED_APP_SENTINEL`
+///     而非 None，让 filter 对未知来源采保守策略（避免 KeePass-as-admin 这类 bypass）
 /// - macOS：留 Phase 4 跟 NSPanel 一起做（需要 `NSWorkspace.frontmostApplication`）
 /// - Linux：目前无需求
 pub fn capture_foreground_app_name() -> Option<String> {
@@ -85,36 +94,90 @@ pub fn capture_foreground_app_name() -> Option<String> {
 
         let process_handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
         if process_handle.is_null() {
-            return None;
+            // OpenProcess 被拒 —— 目标进程权限高于 Teamo（管理员运行的 App、LocalSystem
+            // 服务、受保护进程如 Windows Defender）。返哨兵而非 None，强制 filter 对
+            // 未知来源采保守策略，避免 KeePass-as-admin 这类 bypass。
+            tracing::debug!("OpenProcess denied for pid={pid} — treating as elevated");
+            return Some(ELEVATED_APP_SENTINEL.to_string());
         }
 
-        let mut buffer = vec![0u16; 512];
-        let len = GetModuleFileNameExW(
-            process_handle,
-            std::ptr::null_mut(),
-            buffer.as_mut_ptr(),
-            buffer.len() as u32,
-        );
-        CloseHandle(process_handle);
-
-        if len == 0 {
-            return None;
-        }
-        buffer.truncate(len as usize);
-        let full_path = String::from_utf16_lossy(&buffer);
+        // Windows long-path 模式下 exe 全路径可超 260 字符（MAX_PATH）直至 32767。
+        // 512 默认够 99% 场景，满时 doubling 再试，避免截断后和 app_rules 模糊匹配错位
+        // 或者 "C:\Pro…" 这种截断字符串永远匹配不上用户的规则
+        let mut cap: usize = 512;
+        let full_path = loop {
+            let mut buffer = vec![0u16; cap];
+            let len = GetModuleFileNameExW(
+                process_handle,
+                std::ptr::null_mut(),
+                buffer.as_mut_ptr(),
+                buffer.len() as u32,
+            );
+            if len == 0 {
+                CloseHandle(process_handle);
+                return None;
+            }
+            // len == buffer.len() 说明可能截断 —— Windows API 不保证设 ERROR_INSUFFICIENT_BUFFER
+            // 到 32768 上限（MAX_PATH_LONG + 1）仍不够就放弃
+            if (len as usize) < buffer.len() || cap >= 32768 {
+                buffer.truncate(len as usize);
+                CloseHandle(process_handle);
+                break String::from_utf16_lossy(&buffer);
+            }
+            cap *= 2;
+        };
         // 取 basename：C:\Path\To\Chrome.exe → Chrome.exe
-        Some(
-            full_path
-                .rsplit(['\\', '/'])
-                .next()
-                .unwrap_or(&full_path)
-                .to_string(),
-        )
+        Some(basename(&full_path).to_string())
     }
 
     #[cfg(not(target_os = "windows"))]
     {
         None
+    }
+}
+
+/// 从完整路径提取 basename（文件名部分）。纯函数便于单测。
+/// - `C:\Path\To\Chrome.exe` → `Chrome.exe`
+/// - `/usr/bin/code` → `code`
+/// - `filename.exe`（无分隔符）→ `filename.exe`（原样返）
+/// - 空串 → 空串
+pub fn basename(path: &str) -> &str {
+    path.rsplit(['\\', '/']).next().unwrap_or(path)
+}
+
+#[cfg(test)]
+mod basename_tests {
+    use super::basename;
+
+    #[test]
+    fn windows_backslash_path() {
+        assert_eq!(basename(r"C:\Program Files\Chrome\chrome.exe"), "chrome.exe");
+    }
+
+    #[test]
+    fn unix_forward_slash_path() {
+        assert_eq!(basename("/usr/bin/code"), "code");
+    }
+
+    #[test]
+    fn mixed_separators() {
+        assert_eq!(basename(r"C:/Users/Joy\App.exe"), "App.exe");
+    }
+
+    #[test]
+    fn no_separator() {
+        assert_eq!(basename("app.exe"), "app.exe");
+    }
+
+    #[test]
+    fn empty_string() {
+        assert_eq!(basename(""), "");
+    }
+
+    #[test]
+    fn trailing_separator() {
+        // rsplit 对尾斜杠返空 basename —— 符合 "目录没有文件名" 语义
+        assert_eq!(basename(r"C:\Path\"), "");
     }
 }
 

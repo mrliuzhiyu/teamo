@@ -34,6 +34,11 @@ pub const UI_THEME_DEFAULT: &str = "system"; // "system" / "light" / "dark"
 pub const FILTER_MIN_TEXT_LEN: &str = "filter.min_text_len";
 pub const FILTER_MIN_TEXT_LEN_DEFAULT: &str = "0"; // Phase 1 默认 0 不过滤，架构设想 8
 
+/// DB 里当前内置 domain_rules 的源版本号。seed_rules 启动时比对 YAML 顶部 version：
+/// - 相等 / DB 版本更高 → 不 seed（用户可能 user-modified 过，别碰）
+/// - DB 版本较低（或无记录）→ 清空 builtin 重 seed（保留 user/cloud 规则）
+pub const FILTER_BUILTIN_RULES_VERSION: &str = "filter.builtin_rules_version";
+
 // ── Sensitive 6 类开关（默认全开 = "1"）──
 
 pub const SENS_PASSWORD: &str = "sens.password";
@@ -93,13 +98,23 @@ pub fn read_i64(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::storage::{repository, schema};
+
+    fn setup_db() -> rusqlite::Connection {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch("PRAGMA journal_mode=WAL;").unwrap();
+        schema::run_migrations(&conn).unwrap();
+        conn
+    }
 
     /// 命名规范测试：所有 key 必须用点分命名空间
     #[test]
     fn test_key_naming_convention() {
         let all_keys = [
+            APP_FIRST_RUN_COMPLETED,
             UI_THEME,
             FILTER_MIN_TEXT_LEN,
+            FILTER_BUILTIN_RULES_VERSION,
             SENS_PASSWORD,
             SENS_TOKEN,
             SENS_CREDIT_CARD,
@@ -121,5 +136,55 @@ mod tests {
                 "key '{key}' must not contain whitespace"
             );
         }
+    }
+
+    // ── T3 · read_bool_flag / read_i64 helper 补测 ──
+
+    #[test]
+    fn test_read_bool_flag_returns_default_when_unset() {
+        let conn = setup_db();
+        assert!(read_bool_flag(&conn, "nonexistent.key", true));
+        assert!(!read_bool_flag(&conn, "nonexistent.key", false));
+    }
+
+    #[test]
+    fn test_read_bool_flag_parses_1_0() {
+        let conn = setup_db();
+        repository::set_setting(&conn, "test.flag", Some("1")).unwrap();
+        assert!(read_bool_flag(&conn, "test.flag", false));
+
+        repository::set_setting(&conn, "test.flag", Some("0")).unwrap();
+        assert!(!read_bool_flag(&conn, "test.flag", true));
+    }
+
+    #[test]
+    fn test_read_bool_flag_non_1_is_false() {
+        let conn = setup_db();
+        // 任何非 "1" 值都视作 false（包括 "true" / "yes" / 空字符串）
+        repository::set_setting(&conn, "test.flag", Some("true")).unwrap();
+        assert!(!read_bool_flag(&conn, "test.flag", true));
+    }
+
+    #[test]
+    fn test_read_i64_returns_default_when_unset() {
+        let conn = setup_db();
+        assert_eq!(read_i64(&conn, "nonexistent.key", 42), 42);
+    }
+
+    #[test]
+    fn test_read_i64_parses_valid_numbers() {
+        let conn = setup_db();
+        repository::set_setting(&conn, "test.num", Some("100")).unwrap();
+        assert_eq!(read_i64(&conn, "test.num", 0), 100);
+
+        repository::set_setting(&conn, "test.num", Some("-5")).unwrap();
+        assert_eq!(read_i64(&conn, "test.num", 0), -5);
+    }
+
+    #[test]
+    fn test_read_i64_falls_back_on_garbage() {
+        let conn = setup_db();
+        repository::set_setting(&conn, "test.num", Some("not a number")).unwrap();
+        assert_eq!(read_i64(&conn, "test.num", 999), 999);
     }
 }

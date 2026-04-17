@@ -30,6 +30,9 @@ pub struct ClipboardRow {
     pub last_seen_at: Option<i64>,
     pub created_at: i64,
     pub updated_at: i64,
+    /// URL 命中的 domain_rule（"parse_as_content:v.douyin.com/*" 等）。
+    /// M3 云端 parse_worker 消费字段；v0.1 前端可选显示 "识别为 X 类型"
+    pub matched_domain_rule: Option<String>,
 }
 
 /// 插入请求
@@ -47,6 +50,9 @@ pub struct InsertRequest {
     pub blocked_reason: Option<String>,
     /// 敏感类型（password/token/credit_card/...）
     pub sensitive_type: Option<String>,
+    /// URL 命中的 domain_rule（"parse_as_content:pattern" / "skip_parse:pattern" /
+    /// "skip_upload:pattern"）。M3 云端 parse_worker 读此字段决策 enrich/skip。
+    pub matched_domain_rule: Option<String>,
 }
 
 /// 插入结果
@@ -208,8 +214,9 @@ pub fn insert_clipboard(conn: &Connection, req: InsertRequest) -> Result<InsertR
     conn.execute(
         "INSERT INTO clipboard_local
          (id, content_hash, content, content_type, size_bytes, image_path, file_path,
-          source_app, captured_at, state, blocked_reason, sensitive_type, last_seen_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?9)",
+          source_app, captured_at, state, blocked_reason, sensitive_type,
+          matched_domain_rule, last_seen_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?9)",
         params![
             req.id,
             content_hash,
@@ -223,6 +230,7 @@ pub fn insert_clipboard(conn: &Connection, req: InsertRequest) -> Result<InsertR
             state,
             req.blocked_reason,
             req.sensitive_type,
+            req.matched_domain_rule,
         ],
     )?;
 
@@ -248,7 +256,7 @@ pub fn search_clipboard(
                 c.image_path, c.file_path, c.source_app, c.source_url, c.source_title,
                 c.captured_at, c.sensitive_type, c.blocked_reason, c.state,
                 c.server_id, c.occurrence_count, c.last_seen_at,
-                c.created_at, c.updated_at
+                c.created_at, c.updated_at, c.matched_domain_rule
          FROM clipboard_fts f
          JOIN clipboard_local c ON c.rowid = f.rowid
          WHERE clipboard_fts MATCH ?1
@@ -275,7 +283,7 @@ pub fn list_recent(
                 image_path, file_path, source_app, source_url, source_title,
                 captured_at, sensitive_type, blocked_reason, state,
                 server_id, occurrence_count, last_seen_at,
-                created_at, updated_at
+                created_at, updated_at, matched_domain_rule
          FROM clipboard_local
          ORDER BY captured_at DESC
          LIMIT ?1 OFFSET ?2",
@@ -296,7 +304,7 @@ pub fn get_detail(conn: &Connection, id: &str) -> Result<Option<ClipboardRow>, r
                 image_path, file_path, source_app, source_url, source_title,
                 captured_at, sensitive_type, blocked_reason, state,
                 server_id, occurrence_count, last_seen_at,
-                created_at, updated_at
+                created_at, updated_at, matched_domain_rule
          FROM clipboard_local
          WHERE id = ?1",
         params![id],
@@ -588,6 +596,7 @@ fn row_to_clipboard(row: &rusqlite::Row<'_>) -> Result<ClipboardRow, rusqlite::E
         last_seen_at: row.get(16)?,
         created_at: row.get(17)?,
         updated_at: row.get(18)?,
+        matched_domain_rule: row.get(19)?,
     })
 }
 
@@ -889,6 +898,89 @@ mod tests {
         // 搜索也找不到了
         let results = search_clipboard(&conn, "forgotten", 10).unwrap();
         assert!(results.is_empty());
+    }
+
+    // ── app_rules CRUD 补测（T1 gap）──
+
+    #[test]
+    fn test_app_rules_list_and_remove() {
+        let conn = setup_db();
+        let id1 = add_app_rule(&conn, "Chrome.exe", "blacklist").unwrap();
+        let id2 = add_app_rule(&conn, "1Password.exe", "blacklist").unwrap();
+        let id3 = add_app_rule(&conn, "TrustedApp.exe", "whitelist").unwrap();
+
+        let list = list_app_rules(&conn).unwrap();
+        assert_eq!(list.len(), 3);
+        // ORDER BY rule_type, app_identifier → blacklist 先（字典序：1Password, Chrome）
+        assert_eq!(list[0].rule_type, "blacklist");
+        assert_eq!(list[0].app_identifier, "1Password.exe");
+        assert_eq!(list[1].app_identifier, "Chrome.exe");
+        assert_eq!(list[2].rule_type, "whitelist");
+
+        // remove 中间一条
+        let removed = remove_app_rule(&conn, id1).unwrap();
+        assert!(removed);
+        let list2 = list_app_rules(&conn).unwrap();
+        assert_eq!(list2.len(), 2);
+        assert!(!list2.iter().any(|r| r.id == id1));
+
+        // 不存在的 id 返 false
+        let removed_missing = remove_app_rule(&conn, 99999).unwrap();
+        assert!(!removed_missing);
+
+        // 确保 id2 / id3 还在
+        assert!(list2.iter().any(|r| r.id == id2));
+        assert!(list2.iter().any(|r| r.id == id3));
+    }
+
+    #[test]
+    fn test_app_rule_upsert_overwrites_rule_type() {
+        // add 同一 app_identifier 两次，第二次应更新 rule_type 而不是插入
+        let conn = setup_db();
+        add_app_rule(&conn, "app.exe", "blacklist").unwrap();
+        add_app_rule(&conn, "app.exe", "whitelist").unwrap(); // ON CONFLICT UPDATE
+
+        let list = list_app_rules(&conn).unwrap();
+        assert_eq!(list.len(), 1, "same app_identifier should not duplicate");
+        assert_eq!(list[0].rule_type, "whitelist", "latest add wins");
+    }
+
+    #[test]
+    fn test_app_rule_invalid_type_rejected() {
+        let conn = setup_db();
+        let err = add_app_rule(&conn, "app.exe", "graylist");
+        assert!(err.is_err(), "only blacklist/whitelist allowed");
+    }
+
+    // ── domain_rules delete_by_source 补测（T2 gap）──
+
+    #[test]
+    fn test_delete_domain_rules_by_source_preserves_others() {
+        let conn = setup_db();
+        bulk_insert_domain_rules(
+            &conn,
+            &[
+                ("builtin.com/*".to_string(), "skip_upload".to_string(), 100),
+                ("built2.com/*".to_string(), "skip_parse".to_string(), 80),
+            ],
+            "builtin",
+        )
+        .unwrap();
+        bulk_insert_domain_rules(
+            &conn,
+            &[("user.com/*".to_string(), "skip_upload".to_string(), 500)],
+            "user",
+        )
+        .unwrap();
+
+        assert_eq!(count_domain_rules_by_source(&conn, "builtin").unwrap(), 2);
+        assert_eq!(count_domain_rules_by_source(&conn, "user").unwrap(), 1);
+
+        let removed = delete_domain_rules_by_source(&conn, "builtin").unwrap();
+        assert_eq!(removed, 2);
+        assert_eq!(count_domain_rules_by_source(&conn, "builtin").unwrap(), 0);
+        // user 规则必须保留
+        assert_eq!(count_domain_rules_by_source(&conn, "user").unwrap(), 1);
     }
 
     #[test]
