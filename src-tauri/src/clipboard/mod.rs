@@ -120,10 +120,15 @@ pub fn start_capture_loop(
                 }
                 last_text_hash = Some(text_hash);
 
-                // 闸门：敏感数据 → state=local_only（不会上云），其余 captured
+                // 抓当前前景 App（Windows 实现；macOS/Linux Phase 4）
+                // 必须在 filter + insert 前抓，因为 arboard get_text 本身可能唤起其他窗口
+                // （实际不会，但流程上抓在最早）
+                let source_app = crate::window::platform::capture_foreground_app_name();
+
+                // 闸门：App 黑白名单 + 敏感数据 → state=local_only，其余 captured
                 let decision = {
                     let conn = db.conn();
-                    crate::filter::apply_filters(&conn, &text)
+                    crate::filter::apply_filters(&conn, &text, source_app.as_deref())
                 };
                 let id = generate_id();
                 let req = repository::InsertRequest {
@@ -132,7 +137,7 @@ pub fn start_capture_loop(
                     content_type: "text".to_string(),
                     image_path: None,
                     file_path: None,
-                    source_app: None, // TODO: 后续通过平台 API 获取前台应用名
+                    source_app: source_app.clone(),
                     state: Some(decision.state),
                     blocked_reason: decision.blocked_reason,
                     sensitive_type: decision.sensitive_type,
@@ -197,16 +202,34 @@ pub fn start_capture_loop(
                 // 解决 bug：之前 content=None → canonicalize("") → sha256("")，所有图片共享同一 hash 误判重复
                 let pixel_fingerprint = repository::sha256_hex(pixels);
 
-                // 图片不走敏感文本检测（Phase 1）；Phase 2 接 App 黑白名单后可通过 source_app 拦截
+                // 图片不扫内容；但 App 黑白名单对图片也生效（比如 1Password 截屏 → 拦）
+                let source_app = crate::window::platform::capture_foreground_app_name();
+                let (state, blocked_reason) = {
+                    let conn = db.conn();
+                    match source_app.as_deref().and_then(|app| {
+                        repository::app_rule_match(&conn, app)
+                            .ok()
+                            .flatten()
+                            .map(|rule| (app.to_string(), rule))
+                    }) {
+                        Some((app, rule)) if rule == "blacklist" => (
+                            Some("local_only".to_string()),
+                            Some(format!("app_blacklist:{app}")),
+                        ),
+                        // 白名单不需要特别标记（默认 captured 状态即可）
+                        _ => (None, None),
+                    }
+                };
+
                 let req = repository::InsertRequest {
                     id,
                     content: Some(pixel_fingerprint),
                     content_type: "image".to_string(),
                     image_path: Some(filename),
                     file_path: None,
-                    source_app: None,
-                    state: None,
-                    blocked_reason: None,
+                    source_app,
+                    state,
+                    blocked_reason,
                     sensitive_type: None,
                 };
 

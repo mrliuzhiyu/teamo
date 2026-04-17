@@ -212,6 +212,38 @@ pub fn is_capture_paused(
     state.capture.is_paused()
 }
 
+// ── App 黑白名单（filter-engine 的 app_rules） ──
+
+#[tauri::command]
+pub fn list_app_rules(
+    state: State<'_, AppState>,
+) -> Result<Vec<repository::AppRule>, String> {
+    let conn = state.db.conn();
+    repository::list_app_rules(&conn).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn add_app_rule(
+    state: State<'_, AppState>,
+    app_identifier: String,
+    rule_type: String,
+) -> Result<i64, String> {
+    let conn = state.db.conn();
+    repository::add_app_rule(&conn, &app_identifier, &rule_type).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn remove_app_rule(state: State<'_, AppState>, id: i64) -> Result<bool, String> {
+    let conn = state.db.conn();
+    repository::remove_app_rule(&conn, id).map_err(|e| e.to_string())
+}
+
+/// 抓当前前景 App 名（Windows 实现）。UI 用它做"添加当前 App 到黑/白名单"快捷流程。
+#[tauri::command]
+pub fn get_current_foreground_app() -> Option<String> {
+    crate::window::platform::capture_foreground_app_name()
+}
+
 // ── 数据管理（settings-page 数据区） ──
 
 /// 本地数据信息：路径 + DB 文件大小 + 图片数量

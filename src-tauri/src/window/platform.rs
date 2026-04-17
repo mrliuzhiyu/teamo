@@ -53,6 +53,71 @@ pub fn capture_foreground() -> Option<ForegroundHandle> {
     }
 }
 
+/// 抓取当前前景 App 的可识别名（Windows 下是 exe basename，例如 `Chrome.exe`）。
+///
+/// 供 filter-engine 的 app_rules 黑白名单匹配 + 写入 clipboard_local.source_app 列。
+/// Teamo 自己进程被过滤（避免 panel/main 被当成黑名单源）。
+///
+/// - Windows：`GetForegroundWindow` → pid → `OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION)`
+///   → `GetModuleFileNameExW` 拿完整路径 → 取 basename
+/// - macOS：留 Phase 4 跟 NSPanel 一起做（需要 `NSWorkspace.frontmostApplication`）
+/// - Linux：目前无需求
+pub fn capture_foreground_app_name() -> Option<String> {
+    #[cfg(target_os = "windows")]
+    unsafe {
+        use winapi::shared::minwindef::FALSE;
+        use winapi::um::handleapi::CloseHandle;
+        use winapi::um::processthreadsapi::{GetCurrentProcessId, OpenProcess};
+        use winapi::um::psapi::GetModuleFileNameExW;
+        use winapi::um::winnt::PROCESS_QUERY_LIMITED_INFORMATION;
+        use winapi::um::winuser::{GetForegroundWindow, GetWindowThreadProcessId};
+
+        let hwnd = GetForegroundWindow();
+        if hwnd.is_null() {
+            return None;
+        }
+
+        let mut pid: u32 = 0;
+        GetWindowThreadProcessId(hwnd, &mut pid);
+        if pid == 0 || pid == GetCurrentProcessId() {
+            return None; // Teamo 自己进程不算 source_app
+        }
+
+        let process_handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
+        if process_handle.is_null() {
+            return None;
+        }
+
+        let mut buffer = vec![0u16; 512];
+        let len = GetModuleFileNameExW(
+            process_handle,
+            std::ptr::null_mut(),
+            buffer.as_mut_ptr(),
+            buffer.len() as u32,
+        );
+        CloseHandle(process_handle);
+
+        if len == 0 {
+            return None;
+        }
+        buffer.truncate(len as usize);
+        let full_path = String::from_utf16_lossy(&buffer);
+        // 取 basename：C:\Path\To\Chrome.exe → Chrome.exe
+        Some(
+            full_path
+                .rsplit(['\\', '/'])
+                .next()
+                .unwrap_or(&full_path)
+                .to_string(),
+        )
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        None
+    }
+}
+
 /// 激活句柄对应的窗口 + 模拟 Ctrl+V。
 ///
 /// 调用前调用方应该已经：

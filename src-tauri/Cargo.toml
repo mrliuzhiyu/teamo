@@ -59,7 +59,7 @@ tempfile = "3"
 # 等 Phase 4 做 macOS NSPanel 时一起补。
 [target.'cfg(target_os = "windows")'.dependencies]
 enigo = "0.2"
-winapi = { version = "0.3", features = ["winuser", "processthreadsapi"] }
+winapi = { version = "0.3", features = ["winuser", "processthreadsapi", "psapi", "handleapi", "winnt"] }
 
 [features]
 # 默认启用平台默认特性

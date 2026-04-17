@@ -82,15 +82,40 @@ impl FilterDecision {
             sensitive_type: None,
         }
     }
+
+    pub fn blocked_app(app: &str) -> Self {
+        Self {
+            state: "local_only".to_string(),
+            blocked_reason: Some(format!("app_blacklist:{app}")),
+            sensitive_type: None,
+        }
+    }
 }
 
 /// 对文本内容应用所有过滤器。
 ///
-/// 顺序（架构 L1 优先级）：
-/// 1. 短文本（非 URL）→ local_only:short_text
-/// 2. 敏感检测 6 类 → local_only:sensitive:*
-/// 3. 其余 → captured
-pub fn apply_filters(conn: &Connection, content: &str) -> FilterDecision {
+/// 优先级（架构 L1）：
+/// 1. **App 白名单**命中 → 直接 captured，跳过所有后续（信任用户对白名单 App 的选择）
+/// 2. **App 黑名单**命中 → local_only:app_blacklist（例如 1Password/银行客户端）
+/// 3. 短文本（非 URL）→ local_only:short_text
+/// 4. 敏感检测 6 类 → local_only:sensitive:*
+/// 5. 其余 → captured
+pub fn apply_filters(
+    conn: &Connection,
+    content: &str,
+    source_app: Option<&str>,
+) -> FilterDecision {
+    // L1.2 App 黑白名单（source_app 存在且命中规则时生效）
+    if let Some(app) = source_app {
+        if let Ok(Some(rule)) = crate::storage::repository::app_rule_match(conn, app) {
+            match rule.as_str() {
+                "whitelist" => return FilterDecision::captured(), // 白名单直接放行
+                "blacklist" => return FilterDecision::blocked_app(app),
+                _ => {}
+            }
+        }
+    }
+
     // L1.5 短文本：长度 < min_text_len 且不是 URL → local_only
     let min_len = settings_keys::read_i64(
         conn,
@@ -134,7 +159,7 @@ mod tests {
     #[test]
     fn test_apply_filters_clean_text() {
         let conn = setup_db();
-        let d = apply_filters(&conn, "just some random notes about my day");
+        let d = apply_filters(&conn, "just some random notes about my day", None);
         assert_eq!(d.state, "captured");
         assert!(d.blocked_reason.is_none());
         assert!(d.sensitive_type.is_none());
@@ -143,7 +168,7 @@ mod tests {
     #[test]
     fn test_apply_filters_sensitive_token() {
         let conn = setup_db();
-        let d = apply_filters(&conn, "sk-abc123def456ghi789jklmnopqrstuvwx");
+        let d = apply_filters(&conn, "sk-abc123def456ghi789jklmnopqrstuvwx", None);
         assert_eq!(d.state, "local_only");
         assert_eq!(d.blocked_reason.as_deref(), Some("sensitive:token"));
         assert_eq!(d.sensitive_type.as_deref(), Some("token"));
@@ -152,16 +177,15 @@ mod tests {
     #[test]
     fn test_apply_filters_sensitive_credit_card() {
         let conn = setup_db();
-        let d = apply_filters(&conn, "4111 1111 1111 1111");
+        let d = apply_filters(&conn, "4111 1111 1111 1111", None);
         assert_eq!(d.state, "local_only");
         assert_eq!(d.sensitive_type.as_deref(), Some("credit_card"));
     }
 
     #[test]
     fn test_short_text_filter_default_off() {
-        // FILTER_MIN_TEXT_LEN 默认为 "0"（不过滤）
         let conn = setup_db();
-        let d = apply_filters(&conn, "hi");
+        let d = apply_filters(&conn, "hi", None);
         assert_eq!(d.state, "captured");
     }
 
@@ -174,8 +198,7 @@ mod tests {
             Some("8"),
         )
         .unwrap();
-        // 短于 8 字且非 URL → blocked
-        let d = apply_filters(&conn, "hi bro");
+        let d = apply_filters(&conn, "hi bro", None);
         assert_eq!(d.state, "local_only");
         assert_eq!(d.blocked_reason.as_deref(), Some("short_text"));
     }
@@ -189,20 +212,16 @@ mod tests {
             Some("50"),
         )
         .unwrap();
-        // 短 URL 不应被短文本拦
-        let d = apply_filters(&conn, "https://a.co");
+        let d = apply_filters(&conn, "https://a.co", None);
         assert_eq!(d.state, "captured");
     }
 
     #[test]
     fn test_sens_switch_off_disables_detector() {
         let conn = setup_db();
-        // 关掉 token 检测
         crate::storage::repository::set_setting(&conn, settings_keys::SENS_TOKEN, Some("0"))
             .unwrap();
-        let d = apply_filters(&conn, "sk-abc123def456ghi789jklmnopqrstuvwx");
-        // token 开关关了 → 不走 token 分支；但它仍可能命中 password 检测（类数 + 长度满足）
-        // 断言：即便命中其他 detector，也不会是 Token
+        let d = apply_filters(&conn, "sk-abc123def456ghi789jklmnopqrstuvwx", None);
         assert_ne!(d.sensitive_type.as_deref(), Some("token"));
     }
 
@@ -219,8 +238,68 @@ mod tests {
         ] {
             crate::storage::repository::set_setting(&conn, key, Some("0")).unwrap();
         }
-        // 所有敏感检测关闭，连明显的邮箱也会按 captured
-        let d = apply_filters(&conn, "user@example.com");
+        let d = apply_filters(&conn, "user@example.com", None);
+        assert_eq!(d.state, "captured");
+    }
+
+    // ── App 黑白名单 ──
+
+    #[test]
+    fn test_app_blacklist_blocks_even_innocent_content() {
+        let conn = setup_db();
+        crate::storage::repository::add_app_rule(&conn, "1Password.exe", "blacklist").unwrap();
+        // 正常内容在黑名单 App 下也 local_only
+        let d = apply_filters(&conn, "some harmless notes", Some("1Password.exe"));
+        assert_eq!(d.state, "local_only");
+        assert!(d
+            .blocked_reason
+            .as_deref()
+            .unwrap_or("")
+            .starts_with("app_blacklist:"));
+    }
+
+    #[test]
+    fn test_app_blacklist_case_insensitive() {
+        let conn = setup_db();
+        crate::storage::repository::add_app_rule(&conn, "chrome.exe", "blacklist").unwrap();
+        // 规则存小写，source_app 传大写 → 仍命中（大小写不敏感）
+        let d = apply_filters(&conn, "some content", Some("Chrome.exe"));
+        assert_eq!(d.state, "local_only");
+    }
+
+    #[test]
+    fn test_app_whitelist_bypasses_sensitive() {
+        let conn = setup_db();
+        // 白名单里的 App 即便复制了 token 也放行（用户明知选择）
+        crate::storage::repository::add_app_rule(&conn, "TrustedApp.exe", "whitelist").unwrap();
+        let d = apply_filters(
+            &conn,
+            "sk-abc123def456ghi789jklmnopqrstuvwx",
+            Some("TrustedApp.exe"),
+        );
+        assert_eq!(d.state, "captured");
+        assert!(d.blocked_reason.is_none());
+    }
+
+    #[test]
+    fn test_no_app_rules_falls_through_to_sensitive() {
+        let conn = setup_db();
+        // 无 app_rules 命中 → 按正常流程（敏感检测仍拦）
+        let d = apply_filters(
+            &conn,
+            "sk-abc123def456ghi789jklmnopqrstuvwx",
+            Some("SomeApp.exe"),
+        );
+        assert_eq!(d.state, "local_only");
+        assert_eq!(d.sensitive_type.as_deref(), Some("token"));
+    }
+
+    #[test]
+    fn test_source_app_none_skips_app_rules() {
+        let conn = setup_db();
+        crate::storage::repository::add_app_rule(&conn, "chrome.exe", "blacklist").unwrap();
+        // source_app=None（非 Windows / 抓取失败）→ 跳过 app_rules 检查
+        let d = apply_filters(&conn, "some content", None);
         assert_eq!(d.state, "captured");
     }
 }

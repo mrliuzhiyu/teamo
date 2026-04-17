@@ -1,3 +1,10 @@
+// 本模块是 Rust/TS 双源常量对齐的 Rust 侧，部分常量在 Rust 业务代码里暂未消费
+// 但 TS 侧（src/lib/settings-keys.ts）正在用 —— Rust 编译器看不见 TS 的使用，
+// 会对 `UI_THEME` / `CLOUD_*` 等报 dead_code。保留这些常量是**架构约定**：
+// 将来 Rust 侧接入这些设置项（比如 Phase 2 做主题切换 / Phase 3 做云端同步）
+// 时就能直接用常量，避免再开一套命名。所以模块级 allow 下这类警告。
+#![allow(dead_code)]
+
 //! Settings 表 key 常量 + 默认值单一源。
 //!
 //! 架构约定：

@@ -366,6 +366,94 @@ pub fn get_today_stats(conn: &Connection) -> Result<TodayStats, rusqlite::Error>
     )
 }
 
+// ══════════════════════════════════════════════════════════════════
+// app_rules · App 黑白名单
+// ══════════════════════════════════════════════════════════════════
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AppRule {
+    pub id: i64,
+    pub app_identifier: String, // Windows exe 名（Chrome.exe）/ macOS bundle id
+    pub rule_type: String,      // "blacklist" | "whitelist"
+    pub created_at: i64,
+}
+
+fn row_to_app_rule(row: &rusqlite::Row<'_>) -> Result<AppRule, rusqlite::Error> {
+    Ok(AppRule {
+        id: row.get(0)?,
+        app_identifier: row.get(1)?,
+        rule_type: row.get(2)?,
+        created_at: row.get(3)?,
+    })
+}
+
+pub fn list_app_rules(conn: &Connection) -> Result<Vec<AppRule>, rusqlite::Error> {
+    let mut stmt = conn.prepare(
+        "SELECT id, app_identifier, rule_type, created_at FROM app_rules ORDER BY rule_type, app_identifier",
+    )?;
+    let rows = stmt
+        .query_map([], row_to_app_rule)?
+        .filter_map(|r| r.ok())
+        .collect();
+    Ok(rows)
+}
+
+pub fn add_app_rule(
+    conn: &Connection,
+    app_identifier: &str,
+    rule_type: &str,
+) -> Result<i64, rusqlite::Error> {
+    // 大小写规范化，避免 Chrome.exe / chrome.exe 重复
+    let normalized = app_identifier.trim().to_string();
+    if normalized.is_empty() {
+        return Err(rusqlite::Error::InvalidParameterName(
+            "empty app_identifier".to_string(),
+        ));
+    }
+    if rule_type != "blacklist" && rule_type != "whitelist" {
+        return Err(rusqlite::Error::InvalidParameterName(format!(
+            "invalid rule_type: {rule_type}"
+        )));
+    }
+    conn.execute(
+        "INSERT INTO app_rules (app_identifier, rule_type) VALUES (?1, ?2)
+         ON CONFLICT(app_identifier) DO UPDATE SET rule_type = ?2",
+        params![normalized, rule_type],
+    )?;
+    let id = conn.last_insert_rowid();
+    Ok(id)
+}
+
+pub fn remove_app_rule(conn: &Connection, id: i64) -> Result<bool, rusqlite::Error> {
+    let affected = conn.execute("DELETE FROM app_rules WHERE id = ?1", params![id])?;
+    Ok(affected > 0)
+}
+
+/// 查询 source_app 在规则里的命中（None = 无规则；Some("blacklist"|"whitelist") = 命中）。
+///
+/// 匹配为**大小写不敏感精确匹配**（Chrome.exe 与 chrome.exe 视为同一 App）。
+pub fn app_rule_match(
+    conn: &Connection,
+    source_app: &str,
+) -> Result<Option<String>, rusqlite::Error> {
+    let query = source_app.trim();
+    if query.is_empty() {
+        return Ok(None);
+    }
+    let result: Option<String> = conn
+        .query_row(
+            "SELECT rule_type FROM app_rules WHERE LOWER(app_identifier) = LOWER(?1) LIMIT 1",
+            params![query],
+            |row| row.get(0),
+        )
+        .ok();
+    Ok(result)
+}
+
+// ══════════════════════════════════════════════════════════════════
+// settings · 桌面端配置
+// ══════════════════════════════════════════════════════════════════
+
 /// 获取设置值
 pub fn get_setting(conn: &Connection, key: &str) -> Result<Option<String>, rusqlite::Error> {
     let result = conn.query_row(
