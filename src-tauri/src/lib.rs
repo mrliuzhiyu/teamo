@@ -9,6 +9,7 @@
 mod clipboard;
 mod commands;
 mod storage;
+mod tray;
 mod window;
 
 use commands::AppState;
@@ -25,6 +26,19 @@ pub fn run() {
         .init();
 
     tauri::Builder::default()
+        .on_window_event(|window, event| {
+            // 主窗口点 X 不退出应用（Slack 风格）：只隐藏，Tray 菜单 [退出] 才真正退出。
+            // panel 窗口 decorations=false 用户无法点 X，不会触发 CloseRequested。
+            // tray QUIT 走 app.exit(0) 路径会触发这里，必须靠 IS_QUITTING flag 放行，
+            // 否则 prevent_close 会把退出流程也拦住，永远退不出应用。
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                use std::sync::atomic::Ordering;
+                if window.label() == "main" && !tray::IS_QUITTING.load(Ordering::SeqCst) {
+                    api.prevent_close();
+                    let _ = window.hide();
+                }
+            }
+        })
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_store::Builder::default().build())
         .plugin(tauri_plugin_sql::Builder::default().build())
@@ -135,6 +149,9 @@ pub fn run() {
                 app.global_shortcut().register(shortcut)?;
                 tracing::info!("Global shortcut registered: toggle panel (Cmd/Ctrl+Shift+V)");
             }
+
+            // 7. Tray 图标 + 菜单
+            tray::setup_tray(app)?;
 
             tracing::info!("Teamo started · clipboard capture active");
             Ok(())

@@ -155,15 +155,11 @@ pub fn forget_clipboard(
 
 // ── 暂停 / 恢复捕获 ──
 
-#[tauri::command]
-pub fn pause_capture(
-    state: State<'_, AppState>,
-    minutes: Option<u64>,
-) -> Result<(), String> {
+/// pause_capture 的核心逻辑（同步函数，无 Result），供 Tauri command 和 tray menu handler 共享。
+pub fn do_pause_capture(state: &AppState, minutes: Option<u64>) {
     let duration = minutes.map(|m| Duration::from_secs(m * 60));
     state.capture.pause(duration);
 
-    // 持久化到 settings
     let conn = state.db.conn();
     if let Some(mins) = minutes {
         let until = chrono_now_ms() + (mins as i64 * 60 * 1000);
@@ -173,19 +169,28 @@ pub fn pause_capture(
     }
 
     tracing::info!("Capture paused for {:?} minutes", minutes);
+}
+
+/// resume_capture 的核心逻辑，供 Tauri command 和 tray menu handler 共享。
+pub fn do_resume_capture(state: &AppState) {
+    state.capture.resume();
+    let conn = state.db.conn();
+    let _ = repository::set_setting(&conn, "paused_until", None);
+    tracing::info!("Capture resumed");
+}
+
+#[tauri::command]
+pub fn pause_capture(
+    state: State<'_, AppState>,
+    minutes: Option<u64>,
+) -> Result<(), String> {
+    do_pause_capture(&state, minutes);
     Ok(())
 }
 
 #[tauri::command]
-pub fn resume_capture(
-    state: State<'_, AppState>,
-) -> Result<(), String> {
-    state.capture.resume();
-
-    let conn = state.db.conn();
-    let _ = repository::set_setting(&conn, "paused_until", None);
-
-    tracing::info!("Capture resumed");
+pub fn resume_capture(state: State<'_, AppState>) -> Result<(), String> {
+    do_resume_capture(&state);
     Ok(())
 }
 
