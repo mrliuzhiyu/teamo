@@ -5346,6 +5346,8 @@ dependencies = [
  "enigo",
  "image",
  "keyring",
+ "once_cell",
+ "regex",
  "reqwest 0.12.28",
  "rusqlite",
  "serde",

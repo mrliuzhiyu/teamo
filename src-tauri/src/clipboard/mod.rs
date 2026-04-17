@@ -105,6 +105,8 @@ pub fn start_capture_loop(
                 }
                 last_text_hash = Some(text_hash);
 
+                // 闸门：敏感数据 → state=local_only（不会上云），其余 captured
+                let decision = crate::filter::apply_filters(&text);
                 let id = generate_id();
                 let req = repository::InsertRequest {
                     id,
@@ -113,6 +115,9 @@ pub fn start_capture_loop(
                     image_path: None,
                     file_path: None,
                     source_app: None, // TODO: 后续通过平台 API 获取前台应用名
+                    state: Some(decision.state),
+                    blocked_reason: decision.blocked_reason,
+                    sensitive_type: decision.sensitive_type,
                 };
 
                 let conn = db.conn();
@@ -174,6 +179,7 @@ pub fn start_capture_loop(
                 // 解决 bug：之前 content=None → canonicalize("") → sha256("")，所有图片共享同一 hash 误判重复
                 let pixel_fingerprint = repository::sha256_hex(pixels);
 
+                // 图片不走敏感文本检测（Phase 1）；Phase 2 接 App 黑白名单后可通过 source_app 拦截
                 let req = repository::InsertRequest {
                     id,
                     content: Some(pixel_fingerprint),
@@ -181,6 +187,9 @@ pub fn start_capture_loop(
                     image_path: Some(filename),
                     file_path: None,
                     source_app: None,
+                    state: None,
+                    blocked_reason: None,
+                    sensitive_type: None,
                 };
 
                 let conn = db.conn();

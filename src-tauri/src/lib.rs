@@ -8,6 +8,7 @@
 
 mod clipboard;
 mod commands;
+mod filter;
 mod storage;
 mod tray;
 mod window;

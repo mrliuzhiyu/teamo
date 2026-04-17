@@ -33,6 +33,7 @@ pub struct ClipboardRow {
 }
 
 /// 插入请求
+#[derive(Default)]
 pub struct InsertRequest {
     pub id: String,
     pub content: Option<String>,
@@ -40,6 +41,12 @@ pub struct InsertRequest {
     pub image_path: Option<String>,
     pub file_path: Option<String>,
     pub source_app: Option<String>,
+    /// state 列值；不传默认 "captured"。闸门拦截时为 "local_only"。
+    pub state: Option<String>,
+    /// 闸门命中时填充（比如 "sensitive:password"）
+    pub blocked_reason: Option<String>,
+    /// 敏感类型（password/token/credit_card/...）
+    pub sensitive_type: Option<String>,
 }
 
 /// 插入结果
@@ -197,11 +204,12 @@ pub fn insert_clipboard(conn: &Connection, req: InsertRequest) -> Result<InsertR
         return Ok(InsertResult::Deduplicated { existing_id });
     }
 
+    let state = req.state.as_deref().unwrap_or("captured");
     conn.execute(
         "INSERT INTO clipboard_local
          (id, content_hash, content, content_type, size_bytes, image_path, file_path,
-          source_app, captured_at, state, last_seen_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 'captured', ?9)",
+          source_app, captured_at, state, blocked_reason, sensitive_type, last_seen_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?9)",
         params![
             req.id,
             content_hash,
@@ -212,6 +220,9 @@ pub fn insert_clipboard(conn: &Connection, req: InsertRequest) -> Result<InsertR
             req.file_path,
             req.source_app,
             now,
+            state,
+            req.blocked_reason,
+            req.sensitive_type,
         ],
     )?;
 
@@ -428,6 +439,7 @@ mod tests {
             image_path: None,
             file_path: None,
             source_app: Some("VS Code".to_string()),
+            ..Default::default()
         };
 
         let result = insert_clipboard(&conn, req).unwrap();
@@ -451,6 +463,7 @@ mod tests {
             image_path: None,
             file_path: None,
             source_app: None,
+            ..Default::default()
         };
         let req2 = InsertRequest {
             id: "uuid-2".to_string(),
@@ -459,6 +472,7 @@ mod tests {
             image_path: None,
             file_path: None,
             source_app: None,
+            ..Default::default()
         };
 
         insert_clipboard(&conn, req1).unwrap();
@@ -483,6 +497,7 @@ mod tests {
             image_path: None,
             file_path: None,
             source_app: None,
+            ..Default::default()
         };
         let req2 = InsertRequest {
             id: "uuid-2".to_string(),
@@ -491,6 +506,7 @@ mod tests {
             image_path: None,
             file_path: None,
             source_app: None,
+            ..Default::default()
         };
 
         insert_clipboard(&conn, req1).unwrap();
@@ -511,6 +527,7 @@ mod tests {
             image_path: None,
             file_path: None,
             source_app: None,
+            ..Default::default()
         };
         let req2 = InsertRequest {
             id: "uuid-2".to_string(),
@@ -519,6 +536,7 @@ mod tests {
             image_path: None,
             file_path: None,
             source_app: None,
+            ..Default::default()
         };
 
         insert_clipboard(&conn, req1).unwrap();
@@ -539,6 +557,7 @@ mod tests {
             image_path: Some("img-1.png".to_string()),
             file_path: None,
             source_app: None,
+            ..Default::default()
         };
         let req2 = InsertRequest {
             id: "img-2".to_string(),
@@ -547,6 +566,7 @@ mod tests {
             image_path: Some("img-2.png".to_string()),
             file_path: None,
             source_app: None,
+            ..Default::default()
         };
 
         assert!(matches!(insert_clipboard(&conn, req1).unwrap(), InsertResult::Inserted));
@@ -569,6 +589,7 @@ mod tests {
             image_path: Some("img-1.png".to_string()),
             file_path: None,
             source_app: None,
+            ..Default::default()
         };
         let req2 = InsertRequest {
             id: "img-2".to_string(),
@@ -577,6 +598,7 @@ mod tests {
             image_path: Some("img-2.png".to_string()),
             file_path: None,
             source_app: None,
+            ..Default::default()
         };
 
         insert_clipboard(&conn, req1).unwrap();
@@ -600,6 +622,7 @@ mod tests {
             image_path: None,
             file_path: None,
             source_app: None,
+            ..Default::default()
         };
         let req2 = InsertRequest {
             id: "uuid-2".to_string(),
@@ -608,6 +631,7 @@ mod tests {
             image_path: None,
             file_path: None,
             source_app: None,
+            ..Default::default()
         };
 
         insert_clipboard(&conn, req1).unwrap();
@@ -630,6 +654,7 @@ mod tests {
                 image_path: None,
                 file_path: None,
                 source_app: None,
+                ..Default::default()
             };
             insert_clipboard(&conn, req).unwrap();
         }
@@ -652,6 +677,7 @@ mod tests {
             image_path: None,
             file_path: None,
             source_app: Some("Chrome".to_string()),
+            ..Default::default()
         };
         insert_clipboard(&conn, req).unwrap();
 
@@ -675,6 +701,7 @@ mod tests {
             image_path: None,
             file_path: None,
             source_app: None,
+            ..Default::default()
         };
         insert_clipboard(&conn, req).unwrap();
 
@@ -728,6 +755,7 @@ mod tests {
                 image_path: None,
                 file_path: None,
                 source_app: None,
+                ..Default::default()
             };
             insert_clipboard(&conn, req).unwrap();
         }
@@ -762,6 +790,7 @@ mod tests {
                 image_path: None,
                 file_path: None,
                 source_app: None,
+                ..Default::default()
             };
             insert_clipboard(&conn, req).unwrap();
         }

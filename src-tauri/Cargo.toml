@@ -45,6 +45,10 @@ keyring = "3.0"
 # HTTP（云端通信，Phase 1B 启用）
 reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
 
+# filter-engine（敏感检测 + 域名规则）
+regex = "1.11"
+once_cell = "1.20"
+
 # Windows 平台系统粘贴模拟（Phase 3B）
 # macOS/Linux 暂不引入，避免 Linux libudev / macOS accessibility 权限负担；
 # 等 Phase 4 做 macOS NSPanel 时一起补。
