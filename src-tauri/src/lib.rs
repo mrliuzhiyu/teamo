@@ -45,6 +45,7 @@ pub fn run() {
         .plugin(tauri_plugin_store::Builder::default().build())
         .plugin(tauri_plugin_sql::Builder::default().build())
         .plugin(tauri_plugin_clipboard_manager::init())
+        .plugin(tauri_plugin_dialog::init())
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
                 .with_handler(|app, _shortcut, event| {
@@ -80,6 +81,8 @@ pub fn run() {
             commands::get_today_stats,
             commands::copy_image_to_clipboard,
             commands::export_data,
+            commands::get_data_info,
+            commands::clear_all_data,
             commands::paste_to_previous,
             commands::forget_clipboard,
             commands::pause_capture,

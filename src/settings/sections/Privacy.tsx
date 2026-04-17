@@ -1,0 +1,59 @@
+import Section, { Row } from "../components/Section";
+import Switch from "../components/Switch";
+import { useBoolSetting } from "../useSettings";
+import { SETTING_KEYS } from "../types";
+
+/// 6 个敏感类型开关 + 短文本阈值（Phase 1 UI 占位，后端 filter 会读这些 key
+/// 但 Phase 1 的 apply_filters 还没接入 —— Phase 2 随 filter-engine 扩展时接上）
+const SENS_ITEMS: Array<{ key: string; label: string; hint: string }> = [
+  { key: SETTING_KEYS.sensPassword, label: "密码", hint: "Aa1@bcdefg 这类强随机串" },
+  { key: SETTING_KEYS.sensToken, label: "Token", hint: "sk-xxx / ghp_xxx / Bearer / JWT" },
+  { key: SETTING_KEYS.sensCreditCard, label: "银行卡", hint: "13-19 位数字 + Luhn 校验" },
+  { key: SETTING_KEYS.sensIdCard, label: "身份证", hint: "18 位 + GB 11643 校验" },
+  { key: SETTING_KEYS.sensPhone, label: "手机号", hint: "中国大陆 1[3-9]xxxx" },
+  { key: SETTING_KEYS.sensEmail, label: "邮箱", hint: "RFC 5322 简化" },
+];
+
+export default function Privacy() {
+  return (
+    <>
+      <Section
+        title="隐私 · 敏感检测"
+        description="命中的内容会被标为 local_only，永不上云"
+      >
+        {SENS_ITEMS.map((item) => (
+          <SensRow key={item.key} settingKey={item.key} label={item.label} hint={item.hint} />
+        ))}
+      </Section>
+
+      <Section
+        title="隐私 · App 黑白名单"
+        description="从指定 App 复制的内容自动进 local_only（Phase 2 上线）"
+      >
+        <Row label="App 黑名单" hint="例：1Password / Bitwarden / 网银客户端">
+          <span className="text-[11px] text-stone-400">Phase 2</span>
+        </Row>
+        <Row label="App 白名单" hint="始终允许上云的 App，优先级高于黑名单">
+          <span className="text-[11px] text-stone-400">Phase 2</span>
+        </Row>
+      </Section>
+    </>
+  );
+}
+
+function SensRow({
+  settingKey,
+  label,
+  hint,
+}: {
+  settingKey: string;
+  label: string;
+  hint: string;
+}) {
+  const [enabled, setEnabled] = useBoolSetting(settingKey, true);
+  return (
+    <Row label={label} hint={hint}>
+      <Switch checked={enabled} onChange={setEnabled} />
+    </Row>
+  );
+}

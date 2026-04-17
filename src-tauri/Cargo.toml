@@ -22,6 +22,7 @@ image = { version = "0.25", default-features = false, features = ["png"] }
 tauri = { version = "2.0", features = ["tray-icon"] }
 tauri-plugin-autostart = "2.0"
 tauri-plugin-clipboard-manager = "2.0"
+tauri-plugin-dialog = "2.0"
 tauri-plugin-global-shortcut = "2.0"
 tauri-plugin-shell = "2.0"
 tauri-plugin-sql = { version = "2.0", features = ["sqlite"] }

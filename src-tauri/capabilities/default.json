@@ -8,6 +8,7 @@
     "shell:allow-open",
     "clipboard-manager:allow-read-text",
     "clipboard-manager:allow-write-text",
+    "dialog:default",
     "store:default",
     "sql:default",
     "global-shortcut:default",

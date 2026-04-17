@@ -8,6 +8,10 @@
 use std::collections::HashMap;
 
 /// 返回每字符 Shannon 熵（bit/char）。空串返回 0。
+///
+/// Phase 1 的 password detector 最终没用这个（见 sensitive.rs），
+/// 但保留它作为工具层 —— Phase 2 的 App 规则或云端侧判重可能会用。
+#[allow(dead_code)]
 pub fn shannon_entropy(s: &str) -> f64 {
     if s.is_empty() {
         return 0.0;

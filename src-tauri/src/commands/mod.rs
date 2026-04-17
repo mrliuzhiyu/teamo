@@ -203,6 +203,85 @@ pub fn is_capture_paused(
     state.capture.is_paused()
 }
 
+// ── 数据管理（settings-page 数据区） ──
+
+/// 本地数据信息：路径 + DB 文件大小 + 图片数量
+#[derive(Debug, serde::Serialize)]
+pub struct DataInfo {
+    pub data_dir: String,
+    pub db_path: String,
+    pub db_bytes: u64,
+    pub image_count: u64,
+    pub image_bytes: u64,
+}
+
+#[tauri::command]
+pub fn get_data_info(state: State<'_, AppState>) -> Result<DataInfo, String> {
+    let db_path = state.db.images_dir().parent()
+        .map(|p| p.join("clipboard.db"))
+        .ok_or_else(|| "cannot resolve db path".to_string())?;
+    let db_bytes = std::fs::metadata(&db_path).map(|m| m.len()).unwrap_or(0);
+
+    let images_dir = state.db.images_dir();
+    let (image_count, image_bytes) = match std::fs::read_dir(&images_dir) {
+        Ok(iter) => {
+            let mut count = 0u64;
+            let mut bytes = 0u64;
+            for entry in iter.flatten() {
+                if let Ok(meta) = entry.metadata() {
+                    if meta.is_file() {
+                        count += 1;
+                        bytes += meta.len();
+                    }
+                }
+            }
+            (count, bytes)
+        }
+        Err(_) => (0, 0),
+    };
+
+    let data_dir = images_dir
+        .parent()
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_default();
+
+    Ok(DataInfo {
+        data_dir,
+        db_path: db_path.to_string_lossy().to_string(),
+        db_bytes,
+        image_count,
+        image_bytes,
+    })
+}
+
+/// 清空全部本地数据：删除 clipboard_local 所有行 + 删除 images/ 下全部文件
+///
+/// 危险操作！前端必须做二次确认后才调用。
+#[tauri::command]
+pub fn clear_all_data(state: State<'_, AppState>) -> Result<(), String> {
+    {
+        let conn = state.db.conn();
+        conn.execute("DELETE FROM clipboard_local", [])
+            .map_err(|e| format!("delete rows: {e}"))?;
+        // clipboard_fts 会通过触发器自动同步；其他表（settings）保留
+    }
+
+    let images_dir = state.db.images_dir();
+    if images_dir.exists() {
+        for entry in std::fs::read_dir(&images_dir)
+            .map_err(|e| format!("read images dir: {e}"))?
+            .flatten()
+        {
+            if entry.metadata().map(|m| m.is_file()).unwrap_or(false) {
+                let _ = std::fs::remove_file(entry.path());
+            }
+        }
+    }
+
+    tracing::info!("All clipboard data cleared");
+    Ok(())
+}
+
 // ── 数据导出 ──
 
 /// 导出 clipboard_local 全部数据 + 图片到 target_dir/teamo-export-YYYYMMDD-HHMMSS/
