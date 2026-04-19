@@ -66,6 +66,23 @@ export function formatPreview(row: ClipboardRow, maxLen = 80, query?: string): s
   return chars.slice(0, maxLen).join("") + "…";
 }
 
+/// 把 source_app + source_title 合成一条可读来源串用于展示。
+/// 策略:优先 window title(通常自带 App 名,信息量最大),没 title 就 app name。
+/// 超长时保留头部 + "…" + 尾部(尾部常是 "- App Name" 辨识应用)。
+export function formatSource(
+  row: Pick<ClipboardRow, "source_app" | "source_title">,
+  maxLen = 60,
+): string | null {
+  const title = row.source_title?.trim();
+  const app = row.source_app?.trim();
+  const label = title || app;
+  if (!label) return null;
+  if (label.length <= maxLen) return label;
+  const head = Math.floor((maxLen - 1) * 0.6);
+  const tail = maxLen - 1 - head;
+  return `${label.slice(0, head)}…${label.slice(-tail)}`;
+}
+
 export type StateBadge = { label: string; tone: "local" | "cloud" | "blocked" };
 
 export function getStateBadge(row: ClipboardRow): StateBadge {

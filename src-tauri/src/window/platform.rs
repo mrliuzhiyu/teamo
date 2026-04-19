@@ -136,6 +136,58 @@ pub fn capture_foreground_app_name() -> Option<String> {
     }
 }
 
+/// 抓前景窗口的标题(如 "main.rs - teamo - Visual Studio Code")。
+///
+/// 和 `capture_foreground_app_name` 并列使用 —— 合起来能得到
+/// "Code.exe · main.rs - teamo - Visual Studio Code" 这种高信息密度的来源标签。
+///
+/// 注意:标题是 PII(浏览器 tab 可能含邮件地址/订单号等)。后续上云过滤再收敛。
+/// Teamo 自己窗口返 None(和 app_name 语义对齐)。
+pub fn capture_foreground_window_title() -> Option<String> {
+    #[cfg(target_os = "windows")]
+    unsafe {
+        use winapi::um::processthreadsapi::GetCurrentProcessId;
+        use winapi::um::winuser::{GetForegroundWindow, GetWindowTextLengthW, GetWindowTextW, GetWindowThreadProcessId};
+
+        let hwnd = GetForegroundWindow();
+        if hwnd.is_null() {
+            return None;
+        }
+
+        let mut pid: u32 = 0;
+        GetWindowThreadProcessId(hwnd, &mut pid);
+        if pid == 0 || pid == GetCurrentProcessId() {
+            return None;
+        }
+
+        // GetWindowTextLengthW 返字符数(不含 \0),可能比实际稍大(race,但无害)。
+        // 加 1 容纳 \0,分配 = len + 1。
+        let len = GetWindowTextLengthW(hwnd);
+        if len <= 0 {
+            return None;
+        }
+        let cap = (len as usize).saturating_add(1);
+        let mut buf = vec![0u16; cap];
+        let written = GetWindowTextW(hwnd, buf.as_mut_ptr(), buf.len() as i32);
+        if written <= 0 {
+            return None;
+        }
+        buf.truncate(written as usize);
+        let s = String::from_utf16_lossy(&buf);
+        let trimmed = s.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_string())
+        }
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        None
+    }
+}
+
 /// 从完整路径提取 basename（文件名部分）。纯函数便于单测。
 /// - `C:\Path\To\Chrome.exe` → `Chrome.exe`
 /// - `/usr/bin/code` → `code`

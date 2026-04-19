@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
 import type { ClipboardRow } from "./types";
-import { formatPreview, formatRelativeTime } from "./utils";
+import { formatPreview, formatRelativeTime, formatSource } from "./utils";
 
 interface Props {
   row: ClipboardRow;
@@ -80,7 +80,14 @@ export default function PreviewOverlay({ row, onClose }: Props) {
               {imgDims.w} × {imgDims.h}
             </span>
           )}
-          {row.source_app && <span className="text-stone-400">· {row.source_app}</span>}
+          {formatSource(row, 80) && (
+            <span
+              className="text-stone-400 truncate max-w-[40%]"
+              title={row.source_title ?? row.source_app ?? ""}
+            >
+              · {formatSource(row, 80)}
+            </span>
+          )}
           <span className="text-stone-400">· {formatRelativeTime(row.captured_at)}</span>
           <span className="ml-auto text-[10px]">Esc 关闭</span>
           <button

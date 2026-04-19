@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type MouseEvent as ReactMouseEvent } from 
 import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
 import type { ClipboardRow } from "./types";
-import { formatPreview, formatRelativeTime, getStateBadge, highlightMatches } from "./utils";
+import { formatPreview, formatRelativeTime, formatSource, getStateBadge, highlightMatches } from "./utils";
 
 interface Props {
   row: ClipboardRow;
@@ -132,7 +132,7 @@ export default function CardItem({
               {row.image_width && row.image_height
                 ? `${row.image_width} × ${row.image_height}`
                 : "尺寸未知"}
-              {row.source_app && ` · 来自 ${row.source_app}`}
+              {formatSource(row, 40) && ` · 来自 ${formatSource(row, 40)}`}
             </div>
           </div>
         </div>
@@ -152,8 +152,13 @@ export default function CardItem({
 
       <div className="mt-1.5 flex items-center gap-2 text-[11px] text-stone-500">
         <span className={`px-1.5 py-0.5 rounded ${badgeClass[badge.tone]}`}>{badge.label}</span>
-        {!isImage && row.source_app && (
-          <span className="truncate max-w-[120px]">{row.source_app}</span>
+        {!isImage && formatSource(row, 50) && (
+          <span
+            className="truncate max-w-[180px]"
+            title={row.source_title ?? row.source_app ?? ""}
+          >
+            {formatSource(row, 50)}
+          </span>
         )}
         <span className="ml-auto" title={new Date(row.captured_at).toLocaleString()}>
           {formatRelativeTime(row.captured_at)}

@@ -57,6 +57,9 @@ pub struct InsertRequest {
     pub image_path: Option<String>,
     pub file_path: Option<String>,
     pub source_app: Option<String>,
+    /// 前景窗口标题(如 "main.rs - teamo - Visual Studio Code")。
+    /// 写入 clipboard_local.source_title 列(FTS 已索引),前端展示用。
+    pub source_title: Option<String>,
     /// state 列值；不传默认 "captured"。闸门拦截时为 "local_only"。
     pub state: Option<String>,
     /// 闸门命中时填充（比如 "sensitive:password"）
@@ -234,9 +237,9 @@ pub fn insert_clipboard(conn: &Connection, req: InsertRequest) -> Result<InsertR
     conn.execute(
         "INSERT INTO clipboard_local
          (id, content_hash, content, content_type, size_bytes, image_path, file_path,
-          source_app, captured_at, state, blocked_reason, sensitive_type,
+          source_app, source_title, captured_at, state, blocked_reason, sensitive_type,
           matched_domain_rule, image_width, image_height, session_id, last_seen_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?9)",
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?10)",
         params![
             req.id,
             content_hash,
@@ -246,6 +249,7 @@ pub fn insert_clipboard(conn: &Connection, req: InsertRequest) -> Result<InsertR
             req.image_path,
             req.file_path,
             req.source_app,
+            req.source_title,
             now,
             state,
             req.blocked_reason,

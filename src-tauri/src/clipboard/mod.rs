@@ -248,8 +248,9 @@ fn ingest_once(
             }
             *last_hash = Some(text_hash);
 
-        // 抓当前前景 App（Windows 实现；macOS/Linux Phase 4）
+        // 抓当前前景 App + 窗口标题（Windows 实现；macOS/Linux Phase 4）
         let source_app = crate::window::platform::capture_foreground_app_name();
+        let source_title = crate::window::platform::capture_foreground_window_title();
 
         // 闸门：App 黑白名单 + 敏感数据 → state=local_only，其余 captured
         let decision = {
@@ -269,6 +270,7 @@ fn ingest_once(
             image_path: None,
             file_path: None,
             source_app: source_app.clone(),
+            source_title,
             state: Some(decision.state),
             blocked_reason: decision.blocked_reason,
             sensitive_type: decision.sensitive_type,
@@ -347,6 +349,7 @@ fn ingest_once(
 
         // 图片 App 黑白名单走 filter::check_app_rules 保持和文本对称
         let source_app = crate::window::platform::capture_foreground_app_name();
+        let source_title = crate::window::platform::capture_foreground_window_title();
         let (state, blocked_reason) = {
             let conn = db.conn();
             match crate::filter::check_app_rules(&conn, source_app.as_deref()) {
@@ -369,6 +372,7 @@ fn ingest_once(
             image_path: Some(filename),
             file_path: None,
             source_app,
+            source_title,
             state,
             blocked_reason,
             sensitive_type: None,
