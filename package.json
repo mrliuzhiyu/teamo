@@ -4,7 +4,7 @@
   "version": "0.0.1",
   "type": "module",
   "description": "你的人生记录 Agent · A clipboard-powered local-first life recording agent",
-  "license": "AGPL-3.0-or-later",
+  "license": "Apache-2.0",
   "author": "Liu Zhiyu <54liuzhiyu@gmail.com>",
   "homepage": "https://github.com/mrliuzhiyu/teamo",
   "repository": {

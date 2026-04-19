@@ -8,7 +8,7 @@
 
 一款好用的本地智能剪切板工具。无感记录、智能过滤、可选同步。
 
-[![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](https://www.gnu.org/licenses/agpl-3.0)
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://www.apache.org/licenses/LICENSE-2.0)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS-lightgrey)]()
 [![Status](https://img.shields.io/badge/status-pre--alpha-orange)]()
 
@@ -101,7 +101,7 @@ Teamo 的核心承诺是：**敏感数据永远不离开你的电脑**。
 
 1. **代码层**：端侧敏感检测命中的内容，本地状态机标记 `local_only`，上行调度器**永远过滤**这个状态。这是单元测试守护的不变量。
 2. **可见证据**：快速面板顶部"今日已记 N · 拦截 M"——每次打开都看见拦截的具体类型（密码 / Token / 银行卡号等）。
-3. **开源审计**：本仓库 AGPL-3.0 许可，代码完全公开。任何人可审计验证承诺。
+3. **开源审计**：本仓库 Apache-2.0 许可，代码完全公开。任何人可审计验证承诺。
 4. **用户可控**：每条本地记录可手动标记上云 / 不上云。
 
 不登录使用 Teamo 时，**没有任何数据离开你的电脑**——也不收集任何遥测、使用统计、错误报告。
@@ -182,17 +182,16 @@ teamo/
 
 ## License
 
-Teamo 采用 **GNU Affero General Public License v3.0 (AGPL-3.0)**。
+Teamo 采用 **Apache License 2.0**。
 
 简单理解：
-- ✅ 你可以自由使用、修改、分发本软件
-- ✅ 你可以商用
-- ⚠️ 任何基于 Teamo 修改后**对外提供网络服务**的项目，**必须同样开源** AGPL-3.0
-- ⚠️ 任何基于 Teamo 修改后分发的版本，必须同样开源 AGPL-3.0
+- ✅ 你可以自由使用、修改、分发、商用本软件
+- ✅ 允许闭源分发（修改后不强制开源）
+- ✅ 含明确专利授权条款
+- ⚠️ 需保留原始版权声明 + License 文本 + NOTICE（如有）
+- ⚠️ 不得使用 "Teamo" 商标名做二次分发背书
 
 详见 [LICENSE](LICENSE)。
-
-> 我们选 AGPL 而不是 MIT，是为了防止有人 fork Teamo 改改包装做闭源商业云端服务。
 
 ---
 

@@ -29,7 +29,7 @@ export default function About() {
           onClick={link("https://github.com/mrliuzhiyu/teamo/blob/main/LICENSE")}
           className="text-[11px] text-brand-600 hover:text-brand-700 underline"
         >
-          AGPL-3.0-or-later
+          Apache-2.0
         </button>
       </Row>
       <Row label="源代码">

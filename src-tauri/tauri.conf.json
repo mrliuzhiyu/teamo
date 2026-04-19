@@ -61,7 +61,7 @@
     "copyright": "Copyright (C) 2026 Liu Zhiyu",
     "publisher": "Liu Zhiyu",
     "homepage": "https://github.com/mrliuzhiyu/teamo",
-    "license": "AGPL-3.0-or-later",
+    "license": "Apache-2.0",
     "macOS": {
       "minimumSystemVersion": "10.15"
     },

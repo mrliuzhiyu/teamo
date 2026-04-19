@@ -73,7 +73,7 @@
 - **隐私**：6 个敏感类型开关持久化（真生效）；App 黑白名单 CRUD（输入框 + 抓当前 App + 黑/白分组列表 + × 删除）
 - **云端**：未登录引导卡片 + 「连接 TextView 云端（即将支持）」+ 了解链接
 - **数据**：路径显示 + 打开文件管理器 + DB/图片字节统计 + JSON/MD 导出 + 保留时长下拉 + 清空（二次确认）
-- **关于**：版本号 + AGPL-3.0 / GitHub / Issues 外链
+- **关于**：版本号 + Apache-2.0 / GitHub / Issues 外链
 
 #### App 黑白名单生效（filter-engine Phase 2A）
 - Windows source_app 抓取：`GetForegroundWindow` → `OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION)` → `GetModuleFileNameExW`，动态 buffer doubling 到 32768 支持 long-path
@@ -130,5 +130,5 @@
 ### 项目启动
 - 仓库初始化
 - 产品定位与架构文档
-- 决策：AGPL-3.0 协议、Tauri 2.x 自建、不登录可用、TextView 云端为可选增值
+- 决策：Apache-2.0 协议（2026-04-19 从 AGPL-3.0 变更，降低二次分发门槛）、Tauri 2.x 自建、不登录可用、TextView 云端为可选增值
 - 初始域名规则库 70+ 条（[domain_rules.yaml](domain_rules.yaml)）

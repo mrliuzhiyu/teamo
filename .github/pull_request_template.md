@@ -37,4 +37,4 @@
 
 ## DCO
 
-- [ ] 我同意以 AGPL-3.0 协议发布本贡献（`git commit -s` 已签名）
+- [ ] 我同意以 Apache-2.0 协议发布本贡献（`git commit -s` 已签名）
