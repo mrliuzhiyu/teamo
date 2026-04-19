@@ -55,6 +55,11 @@ pub struct ExportRow {
     pub sensitive_type: Option<String>,
     pub blocked_reason: Option<String>,
     pub occurrence_count: i64,
+    /// 图片宽高（migration 006 起存 DB，NULL 容忍老数据）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image_width: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image_height: Option<i64>,
     /// 图片源文件丢失时 true（JSON 里暴露，不阻塞导出）
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub image_missing: bool,
@@ -131,7 +136,8 @@ fn fetch_all(conn: &Connection) -> Result<Vec<ExportRow>, String> {
                     source_url, source_title,
                     strftime('%Y-%m-%dT%H:%M:%SZ', captured_at/1000, 'unixepoch'),
                     captured_at,
-                    state, sensitive_type, blocked_reason, occurrence_count
+                    state, sensitive_type, blocked_reason, occurrence_count,
+                    image_width, image_height
              FROM clipboard_local
              ORDER BY captured_at DESC",
         )
@@ -154,6 +160,8 @@ fn fetch_all(conn: &Connection) -> Result<Vec<ExportRow>, String> {
                 sensitive_type: r.get(11)?,
                 blocked_reason: r.get(12)?,
                 occurrence_count: r.get(13)?,
+                image_width: r.get(14)?,
+                image_height: r.get(15)?,
                 image_missing: false,
             })
         })

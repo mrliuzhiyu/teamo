@@ -38,6 +38,10 @@ pub struct ClipboardRow {
     /// 上次被使用（复制到剪贴板）的时间戳（Unix ms），NULL = 从未使用。
     /// 列表排序用 COALESCE(last_used_at, captured_at) 实现"粘贴后 promote"
     pub last_used_at: Option<i64>,
+    /// 图片宽度（px）— content_type='image' 时在 ingest 填充，非图片为 NULL
+    pub image_width: Option<i64>,
+    /// 图片高度（px）— content_type='image' 时在 ingest 填充，非图片为 NULL
+    pub image_height: Option<i64>,
 }
 
 /// 插入请求
@@ -58,6 +62,9 @@ pub struct InsertRequest {
     /// URL 命中的 domain_rule（"parse_as_content:pattern" / "skip_parse:pattern" /
     /// "skip_upload:pattern"）。M3 云端 parse_worker 读此字段决策 enrich/skip。
     pub matched_domain_rule: Option<String>,
+    /// 图片宽高（仅 content_type='image' 有值）
+    pub image_width: Option<i64>,
+    pub image_height: Option<i64>,
 }
 
 /// 插入结果
@@ -220,8 +227,8 @@ pub fn insert_clipboard(conn: &Connection, req: InsertRequest) -> Result<InsertR
         "INSERT INTO clipboard_local
          (id, content_hash, content, content_type, size_bytes, image_path, file_path,
           source_app, captured_at, state, blocked_reason, sensitive_type,
-          matched_domain_rule, last_seen_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?9)",
+          matched_domain_rule, image_width, image_height, last_seen_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?9)",
         params![
             req.id,
             content_hash,
@@ -236,6 +243,8 @@ pub fn insert_clipboard(conn: &Connection, req: InsertRequest) -> Result<InsertR
             req.blocked_reason,
             req.sensitive_type,
             req.matched_domain_rule,
+            req.image_width,
+            req.image_height,
         ],
     )?;
 
@@ -268,7 +277,8 @@ pub fn search_clipboard(
                 c.image_path, c.file_path, c.source_app, c.source_url, c.source_title,
                 c.captured_at, c.sensitive_type, c.blocked_reason, c.state,
                 c.server_id, c.occurrence_count, c.last_seen_at,
-                c.created_at, c.updated_at, c.matched_domain_rule, c.pinned_at, c.last_used_at
+                c.created_at, c.updated_at, c.matched_domain_rule, c.pinned_at, c.last_used_at,
+                c.image_width, c.image_height
          FROM clipboard_fts f
          JOIN clipboard_local c ON c.rowid = f.rowid
          WHERE clipboard_fts MATCH ?1
@@ -305,7 +315,8 @@ pub fn list_recent(
                 image_path, file_path, source_app, source_url, source_title,
                 captured_at, sensitive_type, blocked_reason, state,
                 server_id, occurrence_count, last_seen_at,
-                created_at, updated_at, matched_domain_rule, pinned_at, last_used_at
+                created_at, updated_at, matched_domain_rule, pinned_at, last_used_at,
+                image_width, image_height
          FROM clipboard_local
          ORDER BY (pinned_at IS NULL) ASC, pinned_at DESC,
                   COALESCE(last_used_at, captured_at) DESC
@@ -327,7 +338,8 @@ pub fn get_detail(conn: &Connection, id: &str) -> Result<Option<ClipboardRow>, r
                 image_path, file_path, source_app, source_url, source_title,
                 captured_at, sensitive_type, blocked_reason, state,
                 server_id, occurrence_count, last_seen_at,
-                created_at, updated_at, matched_domain_rule, pinned_at, last_used_at
+                created_at, updated_at, matched_domain_rule, pinned_at, last_used_at,
+                image_width, image_height
          FROM clipboard_local
          WHERE id = ?1",
         params![id],
@@ -644,6 +656,8 @@ fn row_to_clipboard(row: &rusqlite::Row<'_>) -> Result<ClipboardRow, rusqlite::E
         matched_domain_rule: row.get(19)?,
         pinned_at: row.get(20)?,
         last_used_at: row.get(21)?,
+        image_width: row.get(22)?,
+        image_height: row.get(23)?,
     })
 }
 

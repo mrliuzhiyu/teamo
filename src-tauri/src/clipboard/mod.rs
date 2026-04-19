@@ -268,6 +268,8 @@ fn ingest_once(
             blocked_reason: decision.blocked_reason,
             sensitive_type: decision.sensitive_type,
             matched_domain_rule: decision.matched_domain_rule,
+            image_width: None,
+            image_height: None,
         };
 
             let conn = db.conn();
@@ -359,6 +361,8 @@ fn ingest_once(
             blocked_reason,
             sensitive_type: None,
             matched_domain_rule: None,
+            image_width: Some(image.width as i64),
+            image_height: Some(image.height as i64),
         };
 
         let conn = db.conn();

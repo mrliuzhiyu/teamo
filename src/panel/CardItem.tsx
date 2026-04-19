@@ -39,29 +39,15 @@ export default function CardItem({
   const preview = formatPreview(row, 80, query);
   const parts = row.sensitive_type ? [{ text: preview, hit: false }] : highlightMatches(preview, query);
 
-  // 图片缩略图 + 自动解析尺寸显示（后端返 128 缩略后浏览器 naturalWidth 是缩略尺寸）
+  // 图片缩略图：仅 1 次 invoke 拿 128 缩略；原图尺寸直接从 row.image_width/height 读
+  // （migration 006 起由 ingest 存到 DB，避免 20 条列表 × 2 invoke × 200MB IPC 浪费）
   const [thumbnail, setThumbnail] = useState<string | null>(null);
-  const [imgDims, setImgDims] = useState<{ w: number; h: number } | null>(null);
   useEffect(() => {
     if (!isImage) return;
     let cancelled = false;
-    // 拿缩略图用于列表显示
     invoke<string>("get_image_data_url", { id: row.id, maxSize: 128 })
       .then((url) => !cancelled && setThumbnail(url))
       .catch(() => !cancelled && setThumbnail(null));
-    // 单独请求一次原图元数据拿真实尺寸（只做 HEAD 代价：后端会重新读文件 + 解码头，为了
-    // 简化先用前端临时 Image 对象读原图尺寸）—— 这里偷懒用另一次 invoke 返回原图后从
-    // 浏览器 new Image() 读 naturalWidth，成本 = 一张图解码一次。对 20 条列表 ~100ms 内可接受
-    invoke<string>("get_image_data_url", { id: row.id, maxSize: null })
-      .then((url) => {
-        if (cancelled) return;
-        const img = new Image();
-        img.onload = () => {
-          if (!cancelled) setImgDims({ w: img.naturalWidth, h: img.naturalHeight });
-        };
-        img.src = url;
-      })
-      .catch(() => undefined);
     return () => {
       cancelled = true;
     };
@@ -143,7 +129,9 @@ export default function CardItem({
           <div className="flex-1 min-w-0 text-[12px] text-stone-600">
             <div className="text-stone-800 font-medium">截图</div>
             <div className="mt-0.5 text-stone-500 truncate">
-              {imgDims ? `${imgDims.w} × ${imgDims.h}` : "尺寸加载中"}
+              {row.image_width && row.image_height
+                ? `${row.image_width} × ${row.image_height}`
+                : "尺寸未知"}
               {row.source_app && ` · 来自 ${row.source_app}`}
             </div>
           </div>

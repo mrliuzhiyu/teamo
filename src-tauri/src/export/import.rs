@@ -122,8 +122,9 @@ pub fn import_from_dir(
              (id, content_hash, content, content_type, image_path, file_path,
               source_app, source_url, source_title, captured_at,
               sensitive_type, blocked_reason, state, occurrence_count,
-              created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?15)",
+              image_width, image_height, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14,
+                     ?15, ?16, ?17, ?17)",
             params![
                 row.id,
                 content_hash,
@@ -139,6 +140,8 @@ pub fn import_from_dir(
                 row.blocked_reason,
                 row.state,
                 row.occurrence_count,
+                row.image_width,
+                row.image_height,
                 row.captured_at_ms, // created_at / updated_at 用原捕获时间
             ],
         );

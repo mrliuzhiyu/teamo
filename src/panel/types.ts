@@ -24,6 +24,9 @@ export interface ClipboardRow {
   pinned_at: number | null;
   /// 上次被使用时间戳（Unix ms），null = 从未使用。用过的项会 promote 到顶部
   last_used_at: number | null;
+  /// 图片宽高（仅 content_type='image' 有值）— ingest 时存下避免前端再 decode
+  image_width: number | null;
+  image_height: number | null;
 }
 
 export interface TodayStats {
