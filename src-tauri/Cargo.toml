@@ -44,7 +44,7 @@ rusqlite = { version = "0.32", features = ["bundled"] }
 keyring = "3.0"
 
 # HTTP（云端通信，Phase 1B 启用）
-reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
+reqwest = { version = "0.12", features = ["json", "rustls-tls", "multipart"], default-features = false }
 
 # filter-engine（敏感检测 + 域名规则）
 regex = "1.11"

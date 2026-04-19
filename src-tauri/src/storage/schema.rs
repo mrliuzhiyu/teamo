@@ -13,6 +13,7 @@ const MIGRATIONS: &[(i64, &str)] = &[
     (5, include_str!("migrations/005_last_used_at.sql")),
     (6, include_str!("migrations/006_image_dims.sql")),
     (7, include_str!("migrations/007_session_grouping.sql")),
+    (8, include_str!("migrations/008_aggregated_sessions.sql")),
 ];
 
 /// 获取当前 schema 版本（schema_migrations 表不存在返回 0）

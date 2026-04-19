@@ -384,6 +384,46 @@ pub fn toggle_pin(conn: &Connection, id: &str) -> Result<Option<i64>, rusqlite::
     Ok(new_value)
 }
 
+// ── R3.4 aggregated_sessions 上云状态 ──
+
+/// 标记 session 上云成功：写入 / 更新 aggregated_sessions 一行
+pub fn mark_session_uploaded(
+    conn: &Connection,
+    session_id: &str,
+    server_memo_id: Option<&str>,
+) -> Result<(), rusqlite::Error> {
+    let now = now_ms();
+    conn.execute(
+        "INSERT INTO aggregated_sessions (session_id, server_memo_id, uploaded_at, upload_error, created_at, updated_at)
+         VALUES (?1, ?2, ?3, NULL, ?3, ?3)
+         ON CONFLICT(session_id) DO UPDATE SET
+           server_memo_id = excluded.server_memo_id,
+           uploaded_at    = excluded.uploaded_at,
+           upload_error   = NULL,
+           updated_at     = excluded.updated_at",
+        params![session_id, server_memo_id, now],
+    )?;
+    Ok(())
+}
+
+/// 标记 session 上云失败：记录 error（不清 uploaded_at，允许之前成功记录保留）
+pub fn mark_session_upload_error(
+    conn: &Connection,
+    session_id: &str,
+    error: &str,
+) -> Result<(), rusqlite::Error> {
+    let now = now_ms();
+    conn.execute(
+        "INSERT INTO aggregated_sessions (session_id, upload_error, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?3)
+         ON CONFLICT(session_id) DO UPDATE SET
+           upload_error = excluded.upload_error,
+           updated_at   = excluded.updated_at",
+        params![session_id, error, now],
+    )?;
+    Ok(())
+}
+
 // ── L1 Session 分组 ──
 
 /// Session 分配规则（capture 时同步调用）：
@@ -431,21 +471,29 @@ pub struct SessionSummary {
     /// session 里是否有 image / sensitive 类条目（便于 UI 图标提示）
     pub has_image: bool,
     pub has_sensitive: bool,
+    /// 上云时间戳（Unix ms），NULL = 未上云。聚合 tab 卡片用它显示 "✓ 已上云"
+    pub uploaded_at: Option<i64>,
+    /// 云端 memo id（未来 M4 可点开跳 Web 端查看）
+    pub server_memo_id: Option<String>,
 }
 
 /// 按 session 聚合查询（聚合 tab 主数据源）。按 ended_at DESC 排序。
+/// LEFT JOIN aggregated_sessions 拿到上云状态
 pub fn list_sessions(conn: &Connection, limit: i64) -> Result<Vec<SessionSummary>, rusqlite::Error> {
     let mut stmt = conn.prepare(
-        "SELECT session_id,
-                MIN(captured_at) AS started_at,
-                MAX(captured_at) AS ended_at,
+        "SELECT c.session_id,
+                MIN(c.captured_at) AS started_at,
+                MAX(c.captured_at) AS ended_at,
                 COUNT(*) AS item_count,
-                MAX(source_app) AS primary_source_app,
-                MAX(CASE WHEN content_type = 'image' THEN 1 ELSE 0 END) AS has_image,
-                MAX(CASE WHEN sensitive_type IS NOT NULL THEN 1 ELSE 0 END) AS has_sensitive
-         FROM clipboard_local
-         WHERE session_id IS NOT NULL
-         GROUP BY session_id
+                MAX(c.source_app) AS primary_source_app,
+                MAX(CASE WHEN c.content_type = 'image' THEN 1 ELSE 0 END) AS has_image,
+                MAX(CASE WHEN c.sensitive_type IS NOT NULL THEN 1 ELSE 0 END) AS has_sensitive,
+                a.uploaded_at,
+                a.server_memo_id
+         FROM clipboard_local c
+         LEFT JOIN aggregated_sessions a ON a.session_id = c.session_id
+         WHERE c.session_id IS NOT NULL
+         GROUP BY c.session_id
          ORDER BY ended_at DESC
          LIMIT ?1",
     )?;
@@ -462,6 +510,8 @@ pub fn list_sessions(conn: &Connection, limit: i64) -> Result<Vec<SessionSummary
                 primary_source_app: row.get(4)?,
                 has_image: row.get::<_, i64>(5)? != 0,
                 has_sensitive: row.get::<_, i64>(6)? != 0,
+                uploaded_at: row.get(7)?,
+                server_memo_id: row.get(8)?,
             })
         })?
         .filter_map(|r| r.ok())

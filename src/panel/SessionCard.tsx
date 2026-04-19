@@ -42,7 +42,8 @@ export default function SessionCard({
   const { state: authState } = useAuth();
   const toast = useToast();
   const [uploading, setUploading] = useState(false);
-  const [uploadedOnce, setUploadedOnce] = useState(false);
+  const [justUploaded, setJustUploaded] = useState(false);
+  const isUploaded = !!session.uploaded_at || justUploaded;
 
   const handleUpload = async (e: React.MouseEvent) => {
     e.stopPropagation(); // 防止点按钮时误触发展开
@@ -60,7 +61,7 @@ export default function SessionCard({
           ? `已上云 ${result.included_items} 条 · 跳过 ${result.skipped_items} 条（敏感/图片）`
           : `已上云 ${result.included_items} 条`;
       toast("success", msg);
-      setUploadedOnce(true);
+      setJustUploaded(true);
     } catch (err) {
       toast("error", `上云失败：${err}`);
     } finally {
@@ -120,7 +121,7 @@ export default function SessionCard({
           onClick={handleUpload}
           disabled={uploading || !authState?.logged_in}
           className={`absolute right-2 top-2 text-[10px] px-2 py-0.5 rounded shadow-sm transition-colors ${
-            uploadedOnce
+            isUploaded
               ? "bg-emerald-50 text-emerald-700 border border-emerald-200"
               : authState?.logged_in
                 ? "bg-white text-stone-600 border border-stone-200 hover:bg-stone-50"
@@ -129,12 +130,12 @@ export default function SessionCard({
           title={
             !authState?.logged_in
               ? "登录 TextView 后可上云"
-              : uploadedOnce
-                ? "已上云（可再次上云覆盖）"
+              : isUploaded
+                ? `已上云 · ${session.uploaded_at ? new Date(session.uploaded_at).toLocaleString() : "刚刚"}（可再次上云覆盖）`
                 : "将此 session 整理成 memo 上云"
           }
         >
-          {uploading ? "⏳ 上云中" : uploadedOnce ? "✓ 已上云" : "📤 上云"}
+          {uploading ? "⏳ 上云中" : isUploaded ? "✓ 已上云" : "📤 上云"}
         </button>
       </div>
 

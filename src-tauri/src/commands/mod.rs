@@ -254,36 +254,87 @@ pub async fn upload_session(
     state: State<'_, AppState>,
     session_id: String,
 ) -> Result<crate::cloud_sync::UploadSessionResult, String> {
-    // 1. Sync scope：查 items + 过滤 + 组装 payload（不跨 await）
-    let (payload, skipped, included) = {
+    // 1. Sync scope：查 items + 过滤（items 克隆到 owned 供 async 使用）
+    let (owned_items, skipped, device_id, images_dir) = {
         let conn = state.db.conn();
         let items = crate::storage::repository::list_session_items(&conn, &session_id)
             .map_err(|e| format!("load session items: {e}"))?;
         let total = items.len();
-        let filtered = crate::cloud_sync::filter_cloud_safe(&items);
-        let skipped = total - filtered.len();
-        if filtered.is_empty() {
+        let filtered_refs = crate::cloud_sync::filter_cloud_safe(&items);
+        if filtered_refs.is_empty() {
             return Err("此 session 无可上云内容（全部被闸门过滤）".to_string());
         }
+        // 克隆出 owned Vec 供跨 await 使用（ClipboardRow 是 Clone 的）
+        let owned: Vec<crate::storage::repository::ClipboardRow> =
+            filtered_refs.iter().map(|r| (*r).clone()).collect();
+        let skipped = total - owned.len();
         let device_id = crate::cloud_sync::get_or_create_device_id(&conn)?;
-        let memo = crate::cloud_sync::build_session_memo(&session_id, &filtered, &device_id);
-        let payload = serde_json::json!({ "memos": [memo] });
-        (payload, skipped, filtered.len())
+        (owned, skipped, device_id, state.db.images_dir())
     };
 
-    // 2. Async 调 /api/memos/batch
-    let resp = crate::auth::http::authed_post("/api/memos/batch", &payload).await?;
+    // 2. Async：按序上传每张图片拿 URL（失败的图跳过，文字仍上云）
+    let mut image_urls: std::collections::HashMap<String, String> =
+        std::collections::HashMap::new();
+    let mut image_failures = 0usize;
+    for item in &owned_items {
+        if item.content_type != "image" {
+            continue;
+        }
+        let Some(filename) = item.image_path.as_deref() else { continue };
+        let local_path = images_dir.join(filename);
+        match crate::cloud_sync::upload_image_to_cloud(&local_path).await {
+            Ok(url) => {
+                image_urls.insert(item.id.clone(), url);
+            }
+            Err(e) => {
+                tracing::warn!("image upload failed for {}: {e}", item.id);
+                image_failures += 1;
+            }
+        }
+    }
 
+    // 3. 组装 memo payload（sync，不碰 DB）
+    let refs: Vec<&crate::storage::repository::ClipboardRow> = owned_items.iter().collect();
+    let memo = crate::cloud_sync::build_session_memo(&session_id, &refs, &device_id, &image_urls);
+    let payload = serde_json::json!({ "memos": [memo] });
+
+    // 4. Async 调 /api/memos/batch
+    let resp = crate::auth::http::authed_post("/api/memos/batch", &payload).await?;
     let status = resp.status();
     if !status.is_success() {
         let text = resp.text().await.unwrap_or_default();
-        return Err(format!("上云失败（{status}）：{text}"));
+        let err_msg = format!("上云失败（{status}）：{text}");
+        {
+            let conn = state.db.conn();
+            let _ = crate::storage::repository::mark_session_upload_error(
+                &conn,
+                &session_id,
+                &err_msg,
+            );
+        }
+        return Err(err_msg);
+    }
+
+    // 5. 解析响应 + sync 写 aggregated_sessions（R3.4 持久化上云态）
+    let body: serde_json::Value = resp.json().await.unwrap_or(serde_json::json!({}));
+    let server_memo_id = body["memos"]
+        .as_array()
+        .and_then(|a| a.first())
+        .and_then(|m| m["id"].as_str())
+        .map(String::from);
+    {
+        let conn = state.db.conn();
+        let _ = crate::storage::repository::mark_session_uploaded(
+            &conn,
+            &session_id,
+            server_memo_id.as_deref(),
+        );
     }
 
     Ok(crate::cloud_sync::UploadSessionResult {
         uploaded_count: 1,
-        skipped_items: skipped,
-        included_items: included,
+        skipped_items: skipped + image_failures,
+        included_items: owned_items.len() - image_failures,
     })
 }
 

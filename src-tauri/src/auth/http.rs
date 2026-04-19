@@ -57,4 +57,21 @@ pub async fn authed_post<T: serde::Serialize>(
         .map_err(|e| format!("HTTP 重放失败：{e}"))
 }
 
-// authed_multipart 延后到 R3.3（图片上传时再补）：需要 reqwest 开 "multipart" feature
+/// 带认证的 multipart 上传（图片 /api/images/upload 用）
+/// 401 不自动 refresh — multipart 重放需要 Form clone，reqwest Form 不 Clone。
+/// 调用方如果拿到 401 需要自己重试（refresh + 新 Form 再调）
+pub async fn authed_multipart(
+    path: &str,
+    form: reqwest::multipart::Form,
+) -> Result<reqwest::Response, String> {
+    let url = format!("{}{}", super::api_base(), path);
+    let token = super::get_access_token()
+        .ok_or_else(|| "未登录或 access_token 丢失".to_string())?;
+    CLIENT
+        .post(&url)
+        .bearer_auth(&token)
+        .multipart(form)
+        .send()
+        .await
+        .map_err(|e| format!("multipart 上传失败：{e}"))
+}

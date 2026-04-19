@@ -13,6 +13,10 @@ export interface SessionSummary {
   item_count: number;
   has_image: boolean;
   has_sensitive: boolean;
+  /// 上云时间戳，null = 未上云（R3.4 持久化）
+  uploaded_at: number | null;
+  /// 云端 memo id（M4 跳转 Web 端用）
+  server_memo_id: string | null;
 }
 
 const PAGE_SIZE = 50;
