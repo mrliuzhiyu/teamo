@@ -13,6 +13,8 @@ import UndoToast from "./UndoToast";
 import PanelSettings from "./PanelSettings";
 import WelcomeBanner from "./WelcomeBanner";
 import PreviewOverlay from "./PreviewOverlay";
+import TabBar, { type PanelTab } from "./TabBar";
+import AggregatedView from "./AggregatedView";
 import { enterHintLabel } from "../lib/platform";
 import { useToast } from "../lib/toast";
 
@@ -20,6 +22,7 @@ type View = "list" | "settings";
 
 export default function PanelApp() {
   const [view, setView] = useState<View>("list");
+  const [tab, setTab] = useState<PanelTab>("list");
   const [previewRow, setPreviewRow] = useState<ClipboardRow | null>(null);
   const panel = usePanel();
   const searchRef = useRef<HTMLInputElement>(null);
@@ -129,6 +132,21 @@ export default function PanelApp() {
       return () => window.removeEventListener("keydown", onKey);
     }
 
+    // 聚合 tab 暂不支持键盘列表导航（session 展开/收起交互跟 list 不同），
+    // 只响应 Esc 关 panel
+    if (tab === "aggregated") {
+      const onKey = (e: KeyboardEvent) => {
+        if (document.querySelector('[data-teamo-dialog="open"]')) return;
+        if (e.isComposing) return;
+        if (e.key === "Escape") {
+          e.preventDefault();
+          void hidePanel();
+        }
+      };
+      window.addEventListener("keydown", onKey);
+      return () => window.removeEventListener("keydown", onKey);
+    }
+
     const onKey = (e: KeyboardEvent) => {
       // 有 modal dialog 开着时不拦快捷键（Esc / Space 让 dialog 自己处理）
       if (document.querySelector('[data-teamo-dialog="open"]')) return;
@@ -213,7 +231,7 @@ export default function PanelApp() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [panel, handleEnter, hidePanel, view]);
+  }, [panel, handleEnter, hidePanel, view, tab]);
 
   useEffect(() => {
     const win = getCurrentWebviewWindow();
@@ -233,6 +251,15 @@ export default function PanelApp() {
     return <PanelSettings onBack={() => setView("list")} />;
   }
 
+  const handleForgetFromAggregated = useCallback(
+    (row: ClipboardRow) => {
+      // 聚合视图里的 forget 暂用简化路径：直接 invoke 后端 forget，不走 undo toast
+      // （undo toast 要跟 panel.list 交互，聚合视图不持有 list）
+      void invoke("forget_clipboard", { id: row.id }).catch(console.error);
+    },
+    [],
+  );
+
   return (
     <div className="h-screen flex flex-col bg-white select-none relative">
       <StatsHeader
@@ -240,39 +267,51 @@ export default function PanelApp() {
         isPaused={panel.isPaused}
         onClose={() => void hidePanel()}
       />
-      <WelcomeBanner onOpenSettings={() => setView("settings")} />
-      <SearchBar
-        ref={searchRef}
-        value={panel.query}
-        onChange={panel.setQuery}
-        searching={panel.searching}
-      />
-      <CardList
-        list={panel.list}
-        selectedIndex={panel.selectedIndex}
-        query={panel.query}
-        loading={panel.loading}
-        hasMore={panel.hasMore}
-        loadingMore={panel.loadingMore}
-        onSelect={panel.setSelectedIndex}
-        onCopy={handleCopy}
-        onForget={handleForget}
-        onEnter={(r) => void pasteRow(r)}
-        onTogglePin={(r) => void panel.togglePin(r)}
-        onPreview={(r) => setPreviewRow(r)}
-        onLoadMore={() => void panel.loadMore()}
-      />
-      <div className="px-3 py-1 text-[10px] text-stone-400 bg-stone-50 border-t border-stone-200 flex items-center gap-2">
-        <kbd className="px-1 py-0.5 bg-white border border-stone-200 rounded text-[9px]">↑↓</kbd>
-        <span>选择</span>
-        <kbd className="px-1 py-0.5 bg-white border border-stone-200 rounded text-[9px]">Enter</kbd>
-        <span>{enterHintLabel}</span>
-        <kbd className="px-1 py-0.5 bg-white border border-stone-200 rounded text-[9px]">Space</kbd>
-        <span>预览</span>
-        <kbd className="px-1 py-0.5 bg-white border border-stone-200 rounded text-[9px]">Del</kbd>
-        <span>忘记</span>
-        {panel.error && <span className="ml-auto text-red-500 truncate">{panel.error}</span>}
-      </div>
+      <TabBar tab={tab} onChange={setTab} />
+      {tab === "list" ? (
+        <>
+          <WelcomeBanner onOpenSettings={() => setView("settings")} />
+          <SearchBar
+            ref={searchRef}
+            value={panel.query}
+            onChange={panel.setQuery}
+            searching={panel.searching}
+          />
+          <CardList
+            list={panel.list}
+            selectedIndex={panel.selectedIndex}
+            query={panel.query}
+            loading={panel.loading}
+            hasMore={panel.hasMore}
+            loadingMore={panel.loadingMore}
+            onSelect={panel.setSelectedIndex}
+            onCopy={handleCopy}
+            onForget={handleForget}
+            onEnter={(r) => void pasteRow(r)}
+            onTogglePin={(r) => void panel.togglePin(r)}
+            onPreview={(r) => setPreviewRow(r)}
+            onLoadMore={() => void panel.loadMore()}
+          />
+          <div className="px-3 py-1 text-[10px] text-stone-400 bg-stone-50 flex items-center gap-2">
+            <kbd className="px-1 py-0.5 bg-white border border-stone-200 rounded text-[9px]">↑↓</kbd>
+            <span>选择</span>
+            <kbd className="px-1 py-0.5 bg-white border border-stone-200 rounded text-[9px]">Enter</kbd>
+            <span>{enterHintLabel}</span>
+            <kbd className="px-1 py-0.5 bg-white border border-stone-200 rounded text-[9px]">Space</kbd>
+            <span>预览</span>
+            <kbd className="px-1 py-0.5 bg-white border border-stone-200 rounded text-[9px]">Del</kbd>
+            <span>忘记</span>
+            {panel.error && <span className="ml-auto text-red-500 truncate">{panel.error}</span>}
+          </div>
+        </>
+      ) : (
+        <AggregatedView
+          enabled={tab === "aggregated"}
+          onPasteItem={(r) => void pasteRow(r)}
+          onPreviewItem={(r) => setPreviewRow(r)}
+          onForgetItem={handleForgetFromAggregated}
+        />
+      )}
       <ActionBar
         isPaused={panel.isPaused}
         onTogglePause={() => {
