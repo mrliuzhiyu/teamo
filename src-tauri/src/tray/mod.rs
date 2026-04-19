@@ -16,7 +16,7 @@ use crate::commands::{do_pause_capture, do_resume_capture, AppState};
 use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::{
     menu::{MenuBuilder, MenuItemBuilder, SubmenuBuilder},
-    tray::TrayIconBuilder,
+    tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     App, AppHandle, Manager,
 };
 
@@ -73,12 +73,24 @@ pub fn setup_tray(app: &App) -> tauri::Result<()> {
 
     // Tauri 2.x 内部会把 TrayIcon clone 一份存进 manager.tray.icons，
     // 这里的 handle 即使 drop 也不会销毁 tray；显式 `_tray` binding 只是为了代码意图清晰。
+    // Windows/Linux 惯例：左键 = 主操作（切换快速面板），右键 = 展开菜单。
+    // macOS 惯例：左键展开菜单（延后 Phase 4 按平台区分）。
     let _tray = TrayIconBuilder::with_id("main-tray")
         .icon(icon)
         .tooltip("Teamo · 你的人生记录 Agent")
         .menu(&menu)
-        .show_menu_on_left_click(true)
+        .show_menu_on_left_click(false)
         .on_menu_event(handle_menu_event)
+        .on_tray_icon_event(|tray, event| {
+            if let TrayIconEvent::Click {
+                button: MouseButton::Left,
+                button_state: MouseButtonState::Up,
+                ..
+            } = event
+            {
+                show_panel_capturing_foreground(tray.app_handle());
+            }
+        })
         .build(app)?;
 
     Ok(())

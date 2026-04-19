@@ -55,6 +55,9 @@ serde_yaml = "0.9"
 # 统一的错误类型（storage 层）
 thiserror = "2.0"
 
+# base64 编码（图片缩略图 data URL 传给前端）
+base64 = "0.22"
+
 [dev-dependencies]
 # 测试时创建临时目录（data-export 单测用）
 tempfile = "3"

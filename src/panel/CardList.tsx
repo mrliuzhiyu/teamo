@@ -10,6 +10,7 @@ interface Props {
   onSelect: (i: number) => void;
   onCopy: (row: ClipboardRow) => void;
   onForget: (row: ClipboardRow, index: number) => void;
+  onEnter: (row: ClipboardRow) => void;
 }
 
 export default function CardList({
@@ -20,6 +21,7 @@ export default function CardList({
   onSelect,
   onCopy,
   onForget,
+  onEnter,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -51,6 +53,7 @@ export default function CardList({
             onMouseEnter={() => onSelect(i)}
             onCopy={onCopy}
             onForget={(r) => onForget(r, i)}
+            onEnter={onEnter}
           />
         </div>
       ))}

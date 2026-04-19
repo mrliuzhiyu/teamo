@@ -63,6 +63,32 @@ pub fn get_today_stats(
     repository::get_today_stats(&conn).map_err(|e| e.to_string())
 }
 
+// ── 图片缩略图（data URL）──
+
+/// 读取 image 类型记录的 PNG 文件，返回 `data:image/png;base64,...` URL，
+/// 供快速面板的 <img> 标签直接渲染为缩略图（浏览器 CSS 自动缩放）。
+///
+/// 为什么不用 asset protocol：tauri 2.x asset 需要 capabilities fs:allow-read +
+/// scope 配置 data_dir 路径，而 data_dir 是 runtime 决定的动态路径。base64 方案
+/// 零权限配置，对 ~500KB 的截图 overhead 可接受（一次加载 20 张 ~ 10MB）。
+#[tauri::command]
+pub fn get_image_data_url(state: State<'_, AppState>, id: String) -> Result<String, String> {
+    use base64::{engine::general_purpose::STANDARD, Engine as _};
+
+    let filename = {
+        let conn = state.db.conn();
+        let row = repository::get_detail(&conn, &id)
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| format!("row not found: {id}"))?;
+        row.image_path
+            .ok_or_else(|| format!("row {id} has no image_path"))?
+    };
+    let path = state.db.images_dir().join(&filename);
+    let bytes = std::fs::read(&path)
+        .map_err(|e| format!("read {}: {}", path.display(), e))?;
+    Ok(format!("data:image/png;base64,{}", STANDARD.encode(&bytes)))
+}
+
 // ── 图片复制到剪切板 ──
 
 /// 把数据库中某条 image 记录的 PNG 文件还原为 RGBA 写入系统剪切板。

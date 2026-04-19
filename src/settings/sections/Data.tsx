@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open as openShell } from "@tauri-apps/plugin-shell";
-import { save as saveDialog } from "@tauri-apps/plugin-dialog";
+import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import Section, { Row } from "../components/Section";
 import { formatBytes, useDataInfo, useSetting } from "../useSettings";
 import { DATA_RETENTION, DATA_RETENTION_DEFAULT } from "../../lib/settings-keys";
@@ -36,20 +36,19 @@ export default function Data() {
   };
 
   const doExport = async (format: "json" | "markdown") => {
-    // Phase 1 用 dialog.save 让用户选目标目录；Phase 2 换专门的 selectDirectory
-    let target: string | null = null;
+    let parent: string | null = null;
     try {
-      target = await saveDialog({
-        title: "选择导出目录（将创建 teamo-export-*/ 子目录）",
-        defaultPath: "teamo-export",
+      const picked = await openDialog({
+        title: "选择导出目录（将创建 teamo-export-* 子目录）",
+        directory: true,
+        multiple: false,
       });
+      parent = typeof picked === "string" ? picked : null;
     } catch (e) {
-      console.error("save dialog", e);
+      console.error("open dir dialog", e);
       return;
     }
-    if (!target) return;
-    // dialog.save 返回的是文件路径，取其父目录作为 target_parent
-    const parent = target.replace(/[\\/][^\\/]*$/, "");
+    if (!parent) return;
     setExporting(true);
     setExportStatus(null);
     try {
@@ -63,6 +62,8 @@ export default function Data() {
         tone: "ok",
         text: `导出 ${result.exported_count} 条 + ${result.image_count} 张图片 → ${result.target_dir}`,
       });
+      // 导出成功后自动打开目录方便用户查看
+      void openShell(result.target_dir).catch(() => undefined);
     } catch (e) {
       setExportStatus({ tone: "err", text: `导出失败：${e}` });
     } finally {

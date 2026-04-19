@@ -81,6 +81,7 @@ pub fn run() {
             commands::get_clipboard_detail,
             commands::get_today_stats,
             commands::copy_image_to_clipboard,
+            commands::get_image_data_url,
             commands::export_data,
             commands::get_data_info,
             commands::clear_all_data,

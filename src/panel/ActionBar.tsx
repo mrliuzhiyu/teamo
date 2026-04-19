@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from "react";
 import { getAllWebviewWindows, getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
-import CloudCtaButton from "../lib/CloudCtaButton";
 
 interface Props {
   isPaused: boolean;
@@ -81,7 +80,6 @@ export default function ActionBar({ isPaused, onPause, onResume }: Props) {
           </div>
         )}
       </div>
-      <CloudCtaButton variant="compact" />
       <button
         onClick={openSettings}
         className="px-2 py-1 rounded hover:bg-stone-200 text-stone-600 transition-colors ml-auto"

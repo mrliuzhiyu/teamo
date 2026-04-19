@@ -43,23 +43,30 @@ export default function PanelApp() {
     }
   }, []);
 
-  // Enter 行为：复制 + 关闭面板 + 尝试系统粘贴（Windows 触发 Ctrl+V；其他平台静默回退为手动粘贴）
+  // 粘贴某条：复制 + 关面板 + 系统 Ctrl+V（Windows），失败则用户手动粘贴
   // 关键：若 copyToClipboard 返回 false（图片/文件/空/写入失败），
   // 不能 invoke paste_to_previous — 否则 Ctrl+V 会粘贴用户上一次手动复制的内容，
   // 不符合用户选中此条的意图。
+  const pasteRow = useCallback(
+    async (row: ClipboardRow) => {
+      const copied = await copyToClipboard(row);
+      await hidePanel();
+      if (!copied) return;
+      try {
+        await invoke("paste_to_previous");
+      } catch (e) {
+        console.debug("paste_to_previous unavailable:", e);
+      }
+    },
+    [copyToClipboard, hidePanel],
+  );
+
+  // Enter / 双击 都走 pasteRow
   const handleEnter = useCallback(async () => {
     const row = panel.list[panel.selectedIndex];
     if (!row) return;
-    const copied = await copyToClipboard(row);
-    await hidePanel();
-    if (!copied) return;
-    try {
-      await invoke("paste_to_previous");
-    } catch (e) {
-      // 非 Windows 平台 / 模拟失败：用户已拿到剪切板内容，手动 Cmd/Ctrl+V 即可
-      console.debug("paste_to_previous unavailable:", e);
-    }
-  }, [panel.list, panel.selectedIndex, copyToClipboard, hidePanel]);
+    await pasteRow(row);
+  }, [panel.list, panel.selectedIndex, pasteRow]);
 
   // 右侧按钮「复制」：仅写入剪切板、不关闭（UI 可见反馈留给后续增强）
   const handleCopy = useCallback(
@@ -146,6 +153,7 @@ export default function PanelApp() {
         onSelect={panel.setSelectedIndex}
         onCopy={handleCopy}
         onForget={handleForget}
+        onEnter={(r) => void pasteRow(r)}
       />
       <div className="px-3 py-1 text-[10px] text-stone-400 bg-stone-50 border-t border-stone-200 flex items-center gap-2">
         <kbd className="px-1 py-0.5 bg-white border border-stone-200 rounded text-[9px]">↑↓</kbd>
