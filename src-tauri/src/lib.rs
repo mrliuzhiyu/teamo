@@ -83,6 +83,7 @@ pub fn run() {
             commands::copy_image_to_clipboard,
             commands::get_image_data_url,
             commands::export_data,
+            commands::import_data,
             commands::get_data_info,
             commands::clear_all_data,
             commands::list_app_rules,

@@ -226,6 +226,18 @@ pub fn toggle_pin(
     repository::toggle_pin(&conn, &id).map_err(|e| e.to_string())
 }
 
+// ── 数据导入（从 Teamo 自己的 JSON 导出恢复）──
+
+#[tauri::command]
+pub fn import_data(
+    state: State<'_, AppState>,
+    source_dir: String,
+) -> Result<crate::export::import::ImportResult, String> {
+    let conn = state.db.conn();
+    let dest_images = state.db.images_dir();
+    crate::export::import::import_from_dir(&conn, std::path::Path::new(&source_dir), &dest_images)
+}
+
 // ── 标记使用（粘贴后 promote 链路）──
 
 /// 前端 copyToClipboard 成功后调用 → 更新 last_used_at → 列表重排把该项顶到前面。

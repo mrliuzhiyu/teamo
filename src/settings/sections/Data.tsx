@@ -21,6 +21,7 @@ export default function Data() {
   const [retention, setRetention] = useSetting(DATA_RETENTION, DATA_RETENTION_DEFAULT);
   const [exporting, setExporting] = useState(false);
   const [clearing, setClearing] = useState(false);
+  const [importing, setImporting] = useState(false);
   const toast = useToast();
   const confirm = useConfirm();
 
@@ -66,6 +67,43 @@ export default function Data() {
       toast("error", `导出失败：${e}`);
     } finally {
       setExporting(false);
+    }
+  };
+
+  const doImport = async () => {
+    let source: string | null = null;
+    try {
+      const picked = await openDialog({
+        title: "选择 Teamo 导出目录（含 clipboard.json）",
+        directory: true,
+        multiple: false,
+      });
+      source = typeof picked === "string" ? picked : null;
+    } catch (e) {
+      console.error("open dir dialog", e);
+      return;
+    }
+    if (!source) return;
+    setImporting(true);
+    try {
+      const result = await invoke<{
+        imported_count: number;
+        skipped_count: number;
+        copied_images: number;
+        missing_images: number;
+        failed_rows: number;
+      }>("import_data", { sourceDir: source });
+      const parts = [`导入 ${result.imported_count} 条`];
+      if (result.skipped_count) parts.push(`跳过 ${result.skipped_count} 条重复`);
+      if (result.copied_images) parts.push(`${result.copied_images} 张图`);
+      if (result.missing_images) parts.push(`${result.missing_images} 图丢失`);
+      if (result.failed_rows) parts.push(`${result.failed_rows} 条失败`);
+      toast("success", parts.join(" · "));
+      await refresh();
+    } catch (e) {
+      toast("error", `导入失败：${e}`);
+    } finally {
+      setImporting(false);
     }
   };
 
@@ -160,6 +198,18 @@ export default function Data() {
             导出 Markdown
           </button>
         </div>
+      </Row>
+      <Row
+        label="从备份导入"
+        hint="选择之前 JSON 导出的目录 · id 重复会自动跳过"
+      >
+        <button
+          onClick={() => void doImport()}
+          disabled={importing}
+          className="text-[11px] px-2 py-1 bg-white border border-stone-300 rounded hover:bg-stone-100 disabled:opacity-40"
+        >
+          {importing ? "导入中…" : "选择目录导入"}
+        </button>
       </Row>
       <Row
         danger

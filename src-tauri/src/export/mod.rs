@@ -8,6 +8,7 @@
 //! - 图片独立目录，避免单文件 50MB 图片串堆
 //! - 敏感内容在 Markdown 里打码（JSON 保留原内容，用户知情）
 
+pub mod import;
 pub mod json;
 pub mod markdown;
 
