@@ -4,6 +4,7 @@ import Switch from "../components/Switch";
 import { useBoolSetting } from "../useSettings";
 import { useAppRules, type AppRule } from "../useAppRules";
 import { isMac } from "../../lib/platform";
+import { useToast } from "../../lib/toast";
 import {
   SENS_PASSWORD,
   SENS_TOKEN,
@@ -63,6 +64,7 @@ function AppRulesSection() {
   const { blacklist, whitelist, add, remove, pickCurrentApp, error } = useAppRules();
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
+  const toast = useToast();
 
   const submit = async (ruleType: "blacklist" | "whitelist") => {
     const app = input.trim();
@@ -71,13 +73,23 @@ function AppRulesSection() {
     await add(app, ruleType);
     setInput("");
     setBusy(false);
+    toast("success", `已加入${ruleType === "blacklist" ? "黑" : "白"}名单：${app}`);
   };
 
   const fillCurrent = async () => {
     setBusy(true);
     const app = await pickCurrentApp();
     setBusy(false);
-    if (app) setInput(app);
+    if (app) {
+      setInput(app);
+    } else {
+      toast("error", "未能抓取前景 App（可能 Teamo 自己在前台，或进程受保护）");
+    }
+  };
+
+  const handleRemove = async (id: number, name: string) => {
+    await remove(id);
+    toast("info", `已移除规则：${name}`);
   };
 
   const description = isMac
@@ -131,14 +143,14 @@ function AppRulesSection() {
         tone="blacklist"
         hint="命中 = 该 App 复制的内容进 local_only"
         rules={blacklist}
-        onRemove={remove}
+        onRemove={(id) => handleRemove(id, blacklist.find((r) => r.id === id)?.app_identifier ?? "")}
       />
       <RulesList
         title="白名单"
         tone="whitelist"
         hint="命中 = 跳过所有后续检测（敏感也放行）"
         rules={whitelist}
-        onRemove={remove}
+        onRemove={(id) => handleRemove(id, whitelist.find((r) => r.id === id)?.app_identifier ?? "")}
       />
     </Section>
   );

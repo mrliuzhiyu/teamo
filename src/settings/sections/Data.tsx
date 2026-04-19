@@ -3,8 +3,11 @@ import { invoke } from "@tauri-apps/api/core";
 import { open as openShell } from "@tauri-apps/plugin-shell";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import Section, { Row } from "../components/Section";
+import Select from "../components/Select";
 import { formatBytes, useDataInfo, useSetting } from "../useSettings";
 import { DATA_RETENTION, DATA_RETENTION_DEFAULT } from "../../lib/settings-keys";
+import { useToast } from "../../lib/toast";
+import { useConfirm } from "../../lib/ConfirmDialog";
 
 const RETENTION_OPTIONS: Array<{ value: string; label: string; hint: string }> = [
   { value: "forever", label: "永久", hint: "不自动清理（默认）" },
@@ -13,14 +16,13 @@ const RETENTION_OPTIONS: Array<{ value: string; label: string; hint: string }> =
   { value: "1m", label: "最近 1 月", hint: "超过 30 天的记录启动时自动清除" },
 ];
 
-type ExportStatus = null | { tone: "ok" | "err"; text: string };
-
 export default function Data() {
   const { info, refresh } = useDataInfo();
   const [retention, setRetention] = useSetting(DATA_RETENTION, DATA_RETENTION_DEFAULT);
-  const [exportStatus, setExportStatus] = useState<ExportStatus>(null);
   const [exporting, setExporting] = useState(false);
   const [clearing, setClearing] = useState(false);
+  const toast = useToast();
+  const confirm = useConfirm();
 
   const retentionHint =
     RETENTION_OPTIONS.find((o) => o.value === retention)?.hint ??
@@ -50,7 +52,6 @@ export default function Data() {
     }
     if (!parent) return;
     setExporting(true);
-    setExportStatus(null);
     try {
       const result = await invoke<{
         exported_count: number;
@@ -58,31 +59,32 @@ export default function Data() {
         missing_images: number;
         target_dir: string;
       }>("export_data", { format, targetDir: parent });
-      setExportStatus({
-        tone: "ok",
-        text: `导出 ${result.exported_count} 条 + ${result.image_count} 张图片 → ${result.target_dir}`,
-      });
+      toast("success", `导出 ${result.exported_count} 条 + ${result.image_count} 张图片`);
       // 导出成功后自动打开目录方便用户查看
       void openShell(result.target_dir).catch(() => undefined);
     } catch (e) {
-      setExportStatus({ tone: "err", text: `导出失败：${e}` });
+      toast("error", `导出失败：${e}`);
     } finally {
       setExporting(false);
     }
   };
 
   const doClear = async () => {
-    const ok = window.confirm(
-      "确认清空所有本地剪切板数据？\n\n此操作删除 clipboard_local 全部行 + images/ 所有图片。\n设置/规则不受影响。此操作不可撤销。",
-    );
+    const ok = await confirm({
+      title: "清空所有本地剪切板数据？",
+      body: "此操作删除全部剪切板记录 + 图片。\n设置和规则不受影响。\n此操作不可撤销。",
+      confirmText: "清空",
+      cancelText: "取消",
+      danger: true,
+    });
     if (!ok) return;
     setClearing(true);
     try {
       await invoke("clear_all_data");
       await refresh();
-      setExportStatus({ tone: "ok", text: "已清空本地数据" });
+      toast("success", "已清空本地数据");
     } catch (e) {
-      setExportStatus({ tone: "err", text: `清空失败：${e}` });
+      toast("error", `清空失败：${e}`);
     } finally {
       setClearing(false);
     }
@@ -115,17 +117,11 @@ export default function Data() {
         </button>
       </Row>
       <Row label="保留时长" hint={retentionHint}>
-        <select
+        <Select
           value={retention}
-          onChange={(e) => void setRetention(e.target.value)}
-          className="text-[11px] px-2 py-1 bg-white border border-stone-200 rounded focus:outline-none focus:border-stone-400"
-        >
-          {RETENTION_OPTIONS.map((opt) => (
-            <option key={opt.value} value={opt.value}>
-              {opt.label}
-            </option>
-          ))}
-        </select>
+          options={RETENTION_OPTIONS.map((o) => ({ value: o.value, label: o.label }))}
+          onChange={(v) => void setRetention(v)}
+        />
       </Row>
       <Row label="导出全部数据" hint="JSON 或 Markdown + 图片副本">
         <div className="flex items-center gap-2">
@@ -158,17 +154,6 @@ export default function Data() {
           {clearing ? "清空中..." : "清空数据"}
         </button>
       </Row>
-      {exportStatus && (
-        <div
-          className={`px-4 py-2 text-[11px] ${
-            exportStatus.tone === "ok"
-              ? "bg-emerald-50 text-emerald-700"
-              : "bg-red-50 text-red-700"
-          }`}
-        >
-          {exportStatus.text}
-        </div>
-      )}
     </Section>
   );
 }

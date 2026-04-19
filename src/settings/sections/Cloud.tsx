@@ -1,14 +1,29 @@
-import Section from "../components/Section";
-import CloudCtaButton from "../../lib/CloudCtaButton";
+import { open as openShell } from "@tauri-apps/plugin-shell";
+import Section, { Row } from "../components/Section";
 
-/// 云端连接区（未登录占位，M3 登录后补真实状态）
+/// 云端连接区（v0.1 纯本地，M3 接 OAuth + PKCE 真连接）
+/// 不用大卡片 disabled 按钮 — 那种"做不到"的展示反而消耗信任感。一行提示 + 外链足够。
 export default function Cloud() {
+  const openSite = () => {
+    void openShell("https://textview.cn").catch(() => undefined);
+  };
+
   return (
     <Section
       title="云端连接"
-      description="连接后只有有价值的内容会同步，敏感数据永远本地"
+      description="Teamo 可独立使用。连接 TextView 云端后，精选内容同步到云端由 AI 整理成日卡片"
     >
-      <CloudCtaButton variant="full" />
+      <Row
+        label="当前模式"
+        hint="本地优先 · 所有数据仅存本地 · 云端同步 M3 版本支持"
+      >
+        <button
+          onClick={openSite}
+          className="text-[11px] text-stone-500 hover:text-stone-700 underline"
+        >
+          了解 TextView →
+        </button>
+      </Row>
     </Section>
   );
 }

@@ -44,18 +44,9 @@ export default function General() {
         label="全局快捷键"
         hint="按下即在任意 App 唤起快速面板"
       >
-        <div className="flex items-center gap-2">
-          <kbd className="px-2 py-0.5 text-[11px] bg-stone-100 border border-stone-200 rounded">
-            {shortcutLabel}
-          </kbd>
-          <button
-            disabled
-            className="text-[11px] text-stone-400 cursor-not-allowed"
-            title="修改快捷键 Phase 3 支持"
-          >
-            修改
-          </button>
-        </div>
+        <kbd className="px-2 py-0.5 text-[11px] bg-stone-100 border border-stone-200 rounded">
+          {shortcutLabel}
+        </kbd>
       </Row>
       <Row label="语言" hint="后续版本支持更多语言">
         <span className="text-[12px] text-stone-600">简体中文</span>
