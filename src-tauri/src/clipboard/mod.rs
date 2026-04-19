@@ -16,6 +16,7 @@ use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::sync::mpsc;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+use tauri::{AppHandle, Emitter};
 
 #[cfg(target_os = "windows")]
 mod windows_listener;
@@ -94,7 +95,11 @@ impl CaptureState {
 ///
 /// 消费线程有 panic 自愈包装：panic 后 sleep 1s 重新 init arboard 继续 recv。
 /// Listener thread 若失败（CreateWindow / AddListener）log 后退出，整个捕获子系统 offline。
-pub fn start_capture(db: Arc<storage::AppDatabase>, capture_state: Arc<CaptureState>) {
+pub fn start_capture(
+    db: Arc<storage::AppDatabase>,
+    capture_state: Arc<CaptureState>,
+    app: AppHandle,
+) {
     let (tx, rx) = mpsc::channel::<()>();
 
     // 启动 Windows 监听线程
@@ -105,11 +110,11 @@ pub fn start_capture(db: Arc<storage::AppDatabase>, capture_state: Arc<CaptureSt
     let _ = tx.send(());
     // tx 在此 drop 也无妨：windows_listener 已把 clone 的 tx 存进全局静态
 
-    // 消费线程：从 channel 接事件 → ingest
+    // 消费线程：从 channel 接事件 → ingest → emit "clipboard:new" 通知前端
     std::thread::Builder::new()
         .name("teamo-clipboard-consumer".to_string())
         .spawn(move || {
-            consume_loop(db, capture_state, rx);
+            consume_loop(db, capture_state, rx, app);
         })
         .expect("failed to spawn clipboard consumer thread");
 }
@@ -119,6 +124,7 @@ fn consume_loop(
     db: Arc<storage::AppDatabase>,
     capture_state: Arc<CaptureState>,
     rx: mpsc::Receiver<()>,
+    app: AppHandle,
 ) {
     tracing::info!("Clipboard consumer thread started");
 
@@ -126,8 +132,9 @@ fn consume_loop(
     loop {
         let db_inner = Arc::clone(&db);
         let state_inner = Arc::clone(&capture_state);
+        let app_inner = app.clone();
         let result = std::panic::catch_unwind(AssertUnwindSafe(|| {
-            run_consumer(&db_inner, &state_inner, &rx);
+            run_consumer(&db_inner, &state_inner, &rx, &app_inner);
         }));
         match result {
             Ok(()) => {
@@ -146,6 +153,7 @@ fn run_consumer(
     db: &Arc<storage::AppDatabase>,
     capture_state: &Arc<CaptureState>,
     rx: &mpsc::Receiver<()>,
+    app: &AppHandle,
 ) {
     let mut last_hash: Option<String> = None;
     let mut clipboard = match arboard::Clipboard::new() {
@@ -179,7 +187,14 @@ fn run_consumer(
             );
         }
 
-        ingest_once(db, &mut clipboard, &mut last_hash);
+        let inserted = ingest_once(db, &mut clipboard, &mut last_hash);
+        if inserted {
+            // 通知所有前端 webview（panel + main）：有新记录，请增量刷新。
+            // fire-and-forget —— emit 失败不应中断 capture 流
+            if let Err(e) = app.emit("clipboard:new", ()) {
+                tracing::debug!("emit clipboard:new failed: {e}");
+            }
+        }
     }
 }
 
@@ -187,18 +202,22 @@ fn run_consumer(
 ///
 /// 对应原 capture_loop_inner 的单圈 body（不含 sleep）。
 /// `last_hash` 跨调用保留避免重复 ingest 同一内容（比如监听器偶尔重复 fire）。
+///
+/// 返回值 `true` = 本次真写入了一条新记录（Inserted 或 Deduplicated bump），
+/// 调用方据此决定是否 emit clipboard:new 给前端；hidden / 空内容 / 大小超限
+/// / 真实 no-change 返回 false 不 emit（避免前端无意义刷新）
 fn ingest_once(
     db: &Arc<storage::AppDatabase>,
     clipboard: &mut arboard::Clipboard,
     last_hash: &mut Option<String>,
-) {
+) -> bool {
     // OS 级"请忽略我"检查 —— 密码管理器 / 银行 App 设置的官方 MIME 标记
     // （Clipboard Viewer Ignore / ExcludeClipboardContentFromMonitorProcessing 等）。
     // 对标 CopyQ isHidden()；Windows 原生 Clipboard History 也按此语义过滤。
     // 这道比 filter-engine 的 sensitive 正则更权威（密码管理器自己声明"别记我"）。
     if hidden_formats::is_clipboard_hidden() {
         tracing::debug!("Clipboard content marked as hidden by source app — skipping");
-        return;
+        return false;
     }
 
     // 读文本（非空才处理；空文本可能是"截图附带空 CF_UNICODETEXT" 的情况，需 fall-through 到图片分支）
@@ -215,7 +234,7 @@ fn ingest_once(
                     text.len() / 1024,
                     MAX_TEXT_BYTES / 1024,
                 );
-                return;
+                return false;
             }
 
             // 用 SHA256 和图片分支对称，避免 DefaultHasher 的两个问题：
@@ -225,7 +244,7 @@ fn ingest_once(
             let text_hash = repository::sha256_hex(text.as_bytes());
 
             if last_hash.as_deref() == Some(&text_hash) {
-                return; // 没变化
+                return false; // 没变化
             }
             *last_hash = Some(text_hash);
 
@@ -252,18 +271,22 @@ fn ingest_once(
         };
 
             let conn = db.conn();
-            match repository::insert_clipboard(&conn, req) {
+            let inserted = match repository::insert_clipboard(&conn, req) {
                 Ok(repository::InsertResult::Inserted) => {
                     tracing::debug!("Captured new text clipboard entry");
+                    true
                 }
                 Ok(repository::InsertResult::Deduplicated { existing_id }) => {
                     tracing::debug!("Deduplicated with {existing_id}");
+                    // dedup 也 emit：occurrence_count / last_seen_at 变了，前端视图应刷新
+                    true
                 }
                 Err(e) => {
                     tracing::error!("Failed to insert clipboard: {e}");
+                    false
                 }
-            }
-            return;
+            };
+            return inserted;
         }
         // 空文本落下去尝试图片（修复 bug：截图 App 同时放空 CF_UNICODETEXT + CF_BITMAP 时原来图片丢失）
     }
@@ -272,7 +295,7 @@ fn ingest_once(
     if let Ok(image) = clipboard.get_image() {
         let pixels = image.bytes.as_ref();
         if pixels.is_empty() {
-            return;
+            return false;
         }
 
         // 大图阈值保护：避免超大截图（多屏 8K、PhotoShop 导出原图等边界）
@@ -286,14 +309,14 @@ fn ingest_once(
                 pixels.len() / (1024 * 1024),
                 MAX_IMAGE_BYTES / (1024 * 1024),
             );
-            return;
+            return false;
         }
 
         // 全量 pixel sha256 做 dedup 指纹（见原注释：首 4KB hash 会误判截图静默丢失）
         let img_hash = repository::sha256_hex(pixels);
 
         if last_hash.as_deref() == Some(&img_hash) {
-            return;
+            return false;
         }
         *last_hash = Some(img_hash.clone());
 
@@ -310,7 +333,7 @@ fn ingest_once(
             image::ImageFormat::Png,
         ) {
             tracing::error!("Failed to encode image as PNG: {e}");
-            return;
+            return false;
         }
 
         // 图片 App 黑白名单走 filter::check_app_rules 保持和文本对称
@@ -339,11 +362,20 @@ fn ingest_once(
         };
 
         let conn = db.conn();
-        match repository::insert_clipboard(&conn, req) {
-            Ok(_) => tracing::debug!("Captured image clipboard entry"),
-            Err(e) => tracing::error!("Failed to insert image clipboard: {e}"),
-        }
+        return match repository::insert_clipboard(&conn, req) {
+            Ok(_) => {
+                tracing::debug!("Captured image clipboard entry");
+                true
+            }
+            Err(e) => {
+                tracing::error!("Failed to insert image clipboard: {e}");
+                false
+            }
+        };
     }
+
+    // 既非 text 也非 image（file 类型 Phase 2+ 未实现）
+    false
 }
 
 /// 生成简单 UUID（v4 格式，不引 uuid crate）

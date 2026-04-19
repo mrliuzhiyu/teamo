@@ -35,8 +35,17 @@ export default function CardList({
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const sentinelRef = useRef<HTMLDivElement>(null);
+  // 标记：下一次 selectedIndex 变化由 mouse hover 触发 → 不做 scrollIntoView。
+  // 原因：hover 时鼠标已经指在目标卡片上，再触发 scrollIntoView 会让视口轻微
+  // 滚动，改变鼠标相对卡片的坐标，可能反向触发 mouseenter/leave 抖动。
+  // 只有键盘导航（↑↓ → setSelectedIndex 在 PanelApp keydown handler）需要滚动。
+  const skipScrollRef = useRef(false);
 
   useEffect(() => {
+    if (skipScrollRef.current) {
+      skipScrollRef.current = false;
+      return;
+    }
     const el = containerRef.current?.querySelector<HTMLElement>(`[data-idx="${selectedIndex}"]`);
     el?.scrollIntoView({ block: "nearest" });
   }, [selectedIndex]);
@@ -79,7 +88,10 @@ export default function CardList({
             row={row}
             selected={i === selectedIndex}
             query={query}
-            onMouseEnter={() => onSelect(i)}
+            onMouseEnter={() => {
+              skipScrollRef.current = true;
+              onSelect(i);
+            }}
             onCopy={onCopy}
             onForget={(r) => onForget(r, i)}
             onEnter={onEnter}

@@ -281,6 +281,26 @@ export function usePanel(): PanelState {
     };
   }, [loadStats]);
 
+  // 新记录事件监听：clipboard/mod.rs ingest_once insert 成功后 emit `clipboard:new`。
+  // panel 常驻时自动刷新列表（不再需要关了再开才看到新内容）。
+  // query 非空（搜索中）时只刷 stats 不覆盖搜索结果；用 queryRef 读最新值避免
+  // 每次 query 变化 re-subscribe listener
+  const queryRef = useRef(query);
+  useEffect(() => {
+    queryRef.current = query;
+  }, [query]);
+  useEffect(() => {
+    const unlistenPromise = listen<void>("clipboard:new", () => {
+      void loadStats();
+      if (!queryRef.current.trim()) {
+        void loadRecent();
+      }
+    });
+    return () => {
+      void unlistenPromise.then((un) => un());
+    };
+  }, [loadRecent, loadStats]);
+
   return {
     list,
     stats,
