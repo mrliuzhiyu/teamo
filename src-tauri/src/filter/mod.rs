@@ -22,8 +22,8 @@ pub mod url_match;
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 
+#[cfg(test)]
 use crate::settings_keys;
-use cache::FilterSnapshot;
 
 /// 敏感数据类型
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

@@ -67,10 +67,9 @@ pub fn setup_tray(app: &App) -> tauri::Result<()> {
         .item(&quit)
         .build()?;
 
-    let icon = app
-        .default_window_icon()
-        .cloned()
-        .ok_or_else(|| tauri::Error::AssetNotFound("default window icon".into()))?;
+    // Tray 专用图标：单色白 T，透明背景，融入系统任务栏（区别于彩色主 logo）
+    // @2x 让 Windows HiDPI / macOS Retina 屏幕清晰；include_image! 编译期嵌入 + 解码
+    let icon = tauri::include_image!("icons/tray-icon@2x.png");
 
     // Tauri 2.x 内部会把 TrayIcon clone 一份存进 manager.tray.icons，
     // 这里的 handle 即使 drop 也不会销毁 tray；显式 `_tray` binding 只是为了代码意图清晰。

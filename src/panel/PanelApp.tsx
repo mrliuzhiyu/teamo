@@ -131,7 +131,7 @@ export default function PanelApp() {
 
   return (
     <div className="h-screen flex flex-col bg-white select-none relative">
-      <StatsHeader stats={panel.stats} />
+      <StatsHeader stats={panel.stats} onClose={() => void hidePanel()} />
       <SearchBar
         ref={searchRef}
         value={panel.query}
