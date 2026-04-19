@@ -95,11 +95,9 @@ fn handle_menu_event(app: &AppHandle, event: tauri::menu::MenuEvent) {
         }
         ids::TOGGLE_PAUSE => toggle_pause(app),
         ids::SETTINGS => {
-            if let Some(main) = app.get_webview_window("main") {
-                let _ = main.show();
-                let _ = main.unminimize();
-                let _ = main.set_focus();
-            }
+            // 统一走 panel 内 settings 视图，不再开独立 main window
+            // main window 还保留在 conf 里作为未来冗余，但 v0.1 没有正常入口
+            crate::window::panel::open_panel_settings(app);
         }
         ids::QUIT => {
             // 先置 flag 让 CloseRequested handler 放行，再 exit

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import type { ClipboardRow } from "./types";
 import { usePanel, UNDO_WINDOW_MS } from "./usePanel";
@@ -10,6 +11,7 @@ import CardList from "./CardList";
 import ActionBar from "./ActionBar";
 import UndoToast from "./UndoToast";
 import PanelSettings from "./PanelSettings";
+import WelcomeBanner from "./WelcomeBanner";
 import { enterHintLabel } from "../lib/platform";
 
 type View = "list" | "settings";
@@ -18,6 +20,16 @@ export default function PanelApp() {
   const [view, setView] = useState<View>("list");
   const panel = usePanel();
   const searchRef = useRef<HTMLInputElement>(null);
+
+  // 监听后端 "panel:open-settings" 事件（tray 右键设置 / 首次启动如需要）
+  useEffect(() => {
+    const unlisten = listen<void>("panel:open-settings", () => {
+      setView("settings");
+    });
+    return () => {
+      void unlisten.then((un) => un());
+    };
+  }, []);
 
   const hidePanel = useCallback(async () => {
     await getCurrentWebviewWindow().hide();
@@ -91,6 +103,8 @@ export default function PanelApp() {
     // Settings 视图只处理 Esc 返回，不处理列表导航
     if (view === "settings") {
       const onKey = (e: KeyboardEvent) => {
+        // 有 modal dialog 开着时不拦 Esc（dialog 自己处理）
+        if (document.querySelector('[data-teamo-dialog="open"]')) return;
         if (e.key === "Escape") {
           e.preventDefault();
           setView("list");
@@ -101,6 +115,8 @@ export default function PanelApp() {
     }
 
     const onKey = (e: KeyboardEvent) => {
+      // 有 modal dialog 开着时不拦快捷键（Esc 让 dialog 自己处理）
+      if (document.querySelector('[data-teamo-dialog="open"]')) return;
       if (e.key === "Escape") {
         e.preventDefault();
         void hidePanel();
@@ -163,6 +179,7 @@ export default function PanelApp() {
         isPaused={panel.isPaused}
         onClose={() => void hidePanel()}
       />
+      <WelcomeBanner onOpenSettings={() => setView("settings")} />
       <SearchBar
         ref={searchRef}
         value={panel.query}

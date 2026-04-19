@@ -55,6 +55,9 @@ export function ConfirmProvider({ children }: { children: ReactNode }) {
       {pending &&
         createPortal(
           <div
+            role="dialog"
+            aria-modal="true"
+            data-teamo-dialog="open"
             className="fixed inset-0 z-[90] flex items-center justify-center bg-black/30 backdrop-blur-[1px]"
             onMouseDown={(e) => {
               if (e.target === e.currentTarget) close(false);

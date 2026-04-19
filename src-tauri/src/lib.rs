@@ -197,9 +197,9 @@ pub fn run() {
             // 7. Tray 图标 + 菜单
             tray::setup_tray(app)?;
 
-            // 8. 首次启动决策 —— Teamo 是后台守护应用，tauri.conf.json 里 main window
-            //    默认 visible=false 静默启动到 tray。但**首次启动**需要 show 设置页作为引导，
-            //    让用户知道 Teamo 装上了 + 配置自启动 + 了解功能。后续启动不再 show。
+            // 8. 首次启动决策 —— show panel 做引导（欢迎横幅由前端 list 视图渲染）
+            //    原本 show main window，但 v0.2 后所有设置统一走 panel 内 settings 视图，
+            //    main window 失去自然入口，首次启动改 show panel 保持一致性
             {
                 let state: tauri::State<'_, AppState> = app.state();
                 let is_first_run = {
@@ -214,17 +214,14 @@ pub fn run() {
                 };
 
                 if is_first_run {
-                    if let Some(main) = app.get_webview_window("main") {
-                        let _ = main.show();
-                        let _ = main.set_focus();
-                    }
+                    window::panel::show_panel(&app.handle());
                     let conn = state.db.conn();
                     let _ = storage::repository::set_setting(
                         &conn,
                         settings_keys::APP_FIRST_RUN_COMPLETED,
                         Some("1"),
                     );
-                    tracing::info!("First run — showing main window as onboarding");
+                    tracing::info!("First run — showing panel as onboarding");
                 } else {
                     tracing::info!("Not first run — staying silent in tray");
                 }
