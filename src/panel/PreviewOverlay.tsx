@@ -1,5 +1,6 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
+import { invoke } from "@tauri-apps/api/core";
 import type { ClipboardRow } from "./types";
 import { formatPreview, formatRelativeTime } from "./utils";
 
@@ -8,11 +9,40 @@ interface Props {
   onClose: () => void;
 }
 
-/// 长文本预览浮层 — 选中某条按 Space / F3 或右键菜单"查看全文"触发。
-/// 对标 Ditto F3 / CopyQ F7 Preview dock / Maccy hover tooltip。
-/// Esc / 点外部关闭；data-teamo-dialog 标记避免 PanelApp 的 Esc handler 把 Esc 吃掉
-/// 触发 hidePanel。
+/// 全文 / 全尺寸图片预览浮层。
+/// 触发：选中行按 Space / F3 / 右键「查看全文」。
+/// 对标 Ditto F3 全尺寸 + CopyQ F7 Preview dock（做深图片查看）。
+///
+/// 文本：font-mono + whitespace-pre-wrap + break-all 保留格式 + 长单词换行
+/// 图片：invoke get_image_data_url 拿原图 data URL；onLoad 取 naturalWidth/Height 显示尺寸
 export default function PreviewOverlay({ row, onClose }: Props) {
+  const isImage = row.content_type === "image" && row.image_path;
+  const [imgDataUrl, setImgDataUrl] = useState<string | null>(null);
+  const [imgDims, setImgDims] = useState<{ w: number; h: number } | null>(null);
+  const [imgLoading, setImgLoading] = useState(false);
+
+  useEffect(() => {
+    if (!isImage) return;
+    let cancelled = false;
+    setImgLoading(true);
+    invoke<string>("get_image_data_url", { id: row.id })
+      .then((url) => {
+        if (!cancelled) {
+          setImgDataUrl(url);
+          setImgLoading(false);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setImgDataUrl(null);
+          setImgLoading(false);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [row.id, isImage]);
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
@@ -26,8 +56,7 @@ export default function PreviewOverlay({ row, onClose }: Props) {
     return () => window.removeEventListener("keydown", onKey, { capture: true });
   }, [onClose]);
 
-  const isImage = row.content_type === "image";
-  const preview = isImage ? null : row.content ?? formatPreview(row);
+  const textContent = isImage ? null : row.content ?? formatPreview(row);
 
   return createPortal(
     <div
@@ -39,11 +68,16 @@ export default function PreviewOverlay({ row, onClose }: Props) {
         if (e.target === e.currentTarget) onClose();
       }}
     >
-      <div className="bg-white rounded-lg shadow-2xl border border-stone-200 max-w-[95%] w-full max-h-[85vh] flex flex-col overflow-hidden">
+      <div className="bg-white rounded-lg shadow-2xl border border-stone-200 max-w-[95%] w-full max-h-[90vh] flex flex-col overflow-hidden">
         <div className="px-3 py-2 border-b border-stone-200 flex items-center gap-2 text-[11px] text-stone-500 flex-shrink-0 bg-stone-50">
-          <span className="font-semibold text-stone-700">全文预览</span>
-          {row.source_app && <span>· {row.source_app}</span>}
-          <span>· {formatRelativeTime(row.captured_at)}</span>
+          <span className="font-semibold text-stone-700">{isImage ? "图片预览" : "全文预览"}</span>
+          {imgDims && (
+            <span className="text-stone-500">
+              {imgDims.w} × {imgDims.h}
+            </span>
+          )}
+          {row.source_app && <span className="text-stone-400">· {row.source_app}</span>}
+          <span className="text-stone-400">· {formatRelativeTime(row.captured_at)}</span>
           <span className="ml-auto text-[10px]">Esc 关闭</span>
           <button
             onClick={onClose}
@@ -55,8 +89,28 @@ export default function PreviewOverlay({ row, onClose }: Props) {
             </svg>
           </button>
         </div>
-        <div className="px-4 py-3 overflow-auto flex-1 text-[12px] text-stone-800 whitespace-pre-wrap break-all font-mono leading-relaxed">
-          {preview ?? "[图片内容 — 在列表直接查看缩略图]"}
+        <div className="overflow-auto flex-1 flex items-center justify-center bg-stone-50/50">
+          {isImage ? (
+            imgLoading ? (
+              <div className="text-stone-400 text-[12px] py-8">加载图片中…</div>
+            ) : imgDataUrl ? (
+              <img
+                src={imgDataUrl}
+                alt="截图"
+                onLoad={(e) => {
+                  const img = e.currentTarget;
+                  setImgDims({ w: img.naturalWidth, h: img.naturalHeight });
+                }}
+                className="max-w-full max-h-full object-contain"
+              />
+            ) : (
+              <div className="text-red-500 text-[12px] py-8">图片加载失败 — 文件可能已丢失</div>
+            )
+          ) : (
+            <div className="w-full px-4 py-3 text-[12px] text-stone-800 whitespace-pre-wrap break-all font-mono leading-relaxed self-start">
+              {textContent}
+            </div>
+          )}
         </div>
       </div>
     </div>,

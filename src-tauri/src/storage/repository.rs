@@ -35,6 +35,9 @@ pub struct ClipboardRow {
     pub matched_domain_rule: Option<String>,
     /// 置顶时间戳（Unix ms），NULL = 未置顶。列表按 pinned_at DESC 排序让 pin 项聚顶
     pub pinned_at: Option<i64>,
+    /// 上次被使用（复制到剪贴板）的时间戳（Unix ms），NULL = 从未使用。
+    /// 列表排序用 COALESCE(last_used_at, captured_at) 实现"粘贴后 promote"
+    pub last_used_at: Option<i64>,
 }
 
 /// 插入请求
@@ -258,7 +261,7 @@ pub fn search_clipboard(
                 c.image_path, c.file_path, c.source_app, c.source_url, c.source_title,
                 c.captured_at, c.sensitive_type, c.blocked_reason, c.state,
                 c.server_id, c.occurrence_count, c.last_seen_at,
-                c.created_at, c.updated_at, c.matched_domain_rule, c.pinned_at
+                c.created_at, c.updated_at, c.matched_domain_rule, c.pinned_at, c.last_used_at
          FROM clipboard_fts f
          JOIN clipboard_local c ON c.rowid = f.rowid
          WHERE clipboard_fts MATCH ?1
@@ -285,9 +288,10 @@ pub fn list_recent(
                 image_path, file_path, source_app, source_url, source_title,
                 captured_at, sensitive_type, blocked_reason, state,
                 server_id, occurrence_count, last_seen_at,
-                created_at, updated_at, matched_domain_rule, pinned_at
+                created_at, updated_at, matched_domain_rule, pinned_at, last_used_at
          FROM clipboard_local
-         ORDER BY (pinned_at IS NULL) ASC, pinned_at DESC, captured_at DESC
+         ORDER BY (pinned_at IS NULL) ASC, pinned_at DESC,
+                  COALESCE(last_used_at, captured_at) DESC
          LIMIT ?1 OFFSET ?2",
     )?;
 
@@ -306,7 +310,7 @@ pub fn get_detail(conn: &Connection, id: &str) -> Result<Option<ClipboardRow>, r
                 image_path, file_path, source_app, source_url, source_title,
                 captured_at, sensitive_type, blocked_reason, state,
                 server_id, occurrence_count, last_seen_at,
-                created_at, updated_at, matched_domain_rule, pinned_at
+                created_at, updated_at, matched_domain_rule, pinned_at, last_used_at
          FROM clipboard_local
          WHERE id = ?1",
         params![id],
@@ -622,7 +626,19 @@ fn row_to_clipboard(row: &rusqlite::Row<'_>) -> Result<ClipboardRow, rusqlite::E
         updated_at: row.get(18)?,
         matched_domain_rule: row.get(19)?,
         pinned_at: row.get(20)?,
+        last_used_at: row.get(21)?,
     })
+}
+
+/// 标记一条记录为"刚刚被使用"（复制到剪贴板）→ 更新 last_used_at
+/// 被 pasteRow / copyToClipboard 成功后调用；ORDER BY COALESCE(last_used_at,
+/// captured_at) DESC 让该项 promote 到顶部
+pub fn mark_used(conn: &Connection, id: &str) -> Result<(), rusqlite::Error> {
+    conn.execute(
+        "UPDATE clipboard_local SET last_used_at = ?1 WHERE id = ?2",
+        params![now_ms(), id],
+    )?;
+    Ok(())
 }
 
 #[cfg(test)]

@@ -8,8 +8,6 @@ interface Props {
   row: ClipboardRow;
   selected: boolean;
   query: string;
-  /// 列表 index（0-based）。前 9 条显示数字徽章，对应 Ctrl+1..9 快选
-  index: number;
   onMouseEnter: () => void;
   onCopy: (row: ClipboardRow) => void;
   onForget: (row: ClipboardRow) => void;
@@ -28,7 +26,6 @@ export default function CardItem({
   row,
   selected,
   query,
-  index,
   onMouseEnter,
   onCopy,
   onForget,
@@ -38,7 +35,6 @@ export default function CardItem({
 }: Props) {
   const isImage = row.content_type === "image" && row.image_path;
   const isPinned = row.pinned_at !== null && row.pinned_at !== undefined;
-  const showNumberBadge = index < 9;
   const badge = getStateBadge(row);
   const preview = formatPreview(row);
   const parts = row.sensitive_type ? [{ text: preview, hit: false }] : highlightMatches(preview, query);
@@ -108,25 +104,6 @@ export default function CardItem({
       }`}
       title="双击粘贴 · Space 预览 · 右键更多操作"
     >
-      {/* 左上：置顶图标（pin 项）或数字徽章（前 9 条） */}
-      {isPinned ? (
-        <span
-          className="absolute left-1 top-1 text-amber-600 flex-shrink-0"
-          title="已置顶"
-          aria-label="已置顶"
-        >
-          <svg width="10" height="10" viewBox="0 0 10 10" fill="currentColor">
-            <path d="M5 0.5L6 3L8.5 3.5L6.7 5.3L7.2 8L5 6.7L2.8 8L3.3 5.3L1.5 3.5L4 3L5 0.5Z" />
-          </svg>
-        </span>
-      ) : showNumberBadge ? (
-        <span
-          className="absolute left-1 top-1 text-[8px] text-stone-400 bg-stone-100 rounded-sm px-1 leading-[1.4] select-none"
-          title={`Ctrl+${index + 1} 快速粘贴`}
-        >
-          {index + 1}
-        </span>
-      ) : null}
       {isImage ? (
         <div className="flex items-start gap-3 pr-24">
           <div className="flex-shrink-0 w-16 h-16 rounded border border-stone-200 bg-stone-100 overflow-hidden flex items-center justify-center">

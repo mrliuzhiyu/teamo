@@ -92,6 +92,7 @@ pub fn run() {
             commands::paste_to_previous,
             commands::forget_clipboard,
             commands::toggle_pin,
+            commands::mark_used,
             commands::pause_capture,
             commands::resume_capture,
             commands::is_capture_paused,

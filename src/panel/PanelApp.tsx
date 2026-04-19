@@ -40,21 +40,25 @@ export default function PanelApp() {
   // 复制到系统剪切板（仅 text/url；image 粘贴留 Phase 3B），不关闭窗口
   // 返回 true = 确实写入剪切板；false = 跳过（file 类型 / 空内容 / 写入异常）
   // text/url → writeText；image → 后端 copy_image_to_clipboard（读 PNG + arboard set_image）
+  //
+  // 成功后 invoke mark_used 标记该条"刚被使用"→ 下次打开面板时 promote 到顶部。
+  // 不当前 reload list 避免视觉跳动（该项从中间跳到顶让用户失去锚点）。
   const copyToClipboard = useCallback(async (row: ClipboardRow): Promise<boolean> => {
     try {
       if (row.content_type === "image") {
         if (!row.image_path) return false;
         await invoke("copy_image_to_clipboard", { id: row.id });
-        return true;
-      }
-      if (row.content_type === "text" || row.content_type === "url") {
+      } else if (row.content_type === "text" || row.content_type === "url") {
         const text = row.content ?? "";
         if (!text) return false;
         await writeText(text);
-        return true;
+      } else {
+        // file 类型：CF_HDROP 粘贴需要平台特殊化，留更后（v0.2+）
+        return false;
       }
-      // file 类型：CF_HDROP 粘贴需要平台特殊化，留更后（v0.2+）
-      return false;
+      // fire-and-forget；mark_used 失败不影响主流程
+      void invoke("mark_used", { id: row.id }).catch(() => undefined);
+      return true;
     } catch (e) {
       console.error("copyToClipboard failed", e);
       return false;
@@ -119,17 +123,6 @@ export default function PanelApp() {
     const onKey = (e: KeyboardEvent) => {
       // 有 modal dialog 开着时不拦快捷键（Esc / Space 让 dialog 自己处理）
       if (document.querySelector('[data-teamo-dialog="open"]')) return;
-
-      // Ctrl/Cmd + 1..9：直接粘贴对应 index 的项（对标 Maccy ⌘1-9 / Ditto）
-      if ((e.ctrlKey || e.metaKey) && /^[1-9]$/.test(e.key)) {
-        const idx = parseInt(e.key, 10) - 1;
-        const target = panel.list[idx];
-        if (target) {
-          e.preventDefault();
-          void pasteRow(target);
-        }
-        return;
-      }
 
       // F3 或 Space（仅当搜索框为空）→ 打开预览浮层（对标 Ditto F3 / CopyQ F7）
       if (e.key === "F3" || (e.key === " " && panel.query === "")) {
@@ -222,9 +215,9 @@ export default function PanelApp() {
         onTogglePin={(r) => void panel.togglePin(r)}
         onPreview={(r) => setPreviewRow(r)}
       />
-      <div className="px-3 py-1 text-[10px] text-stone-400 bg-stone-50 border-t border-stone-200 flex items-center gap-1.5 flex-wrap">
-        <kbd className="px-1 py-0.5 bg-white border border-stone-200 rounded text-[9px]">Ctrl+1-9</kbd>
-        <span>快选</span>
+      <div className="px-3 py-1 text-[10px] text-stone-400 bg-stone-50 border-t border-stone-200 flex items-center gap-2">
+        <kbd className="px-1 py-0.5 bg-white border border-stone-200 rounded text-[9px]">↑↓</kbd>
+        <span>选择</span>
         <kbd className="px-1 py-0.5 bg-white border border-stone-200 rounded text-[9px]">Enter</kbd>
         <span>{enterHintLabel}</span>
         <kbd className="px-1 py-0.5 bg-white border border-stone-200 rounded text-[9px]">Space</kbd>

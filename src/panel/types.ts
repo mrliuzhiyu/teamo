@@ -22,6 +22,8 @@ export interface ClipboardRow {
   matched_domain_rule: string | null;
   /// 置顶时间戳（Unix ms），null = 未置顶。pin 项聚集在列表顶部
   pinned_at: number | null;
+  /// 上次被使用时间戳（Unix ms），null = 从未使用。用过的项会 promote 到顶部
+  last_used_at: number | null;
 }
 
 export interface TodayStats {

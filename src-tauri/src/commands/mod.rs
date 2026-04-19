@@ -198,6 +198,19 @@ pub fn toggle_pin(
     repository::toggle_pin(&conn, &id).map_err(|e| e.to_string())
 }
 
+// ── 标记使用（粘贴后 promote 链路）──
+
+/// 前端 copyToClipboard 成功后调用 → 更新 last_used_at → 列表重排把该项顶到前面。
+/// "复制 A → 粘 B → 想再粘 A" 这种高频流不用重搜即可找到 A。
+#[tauri::command]
+pub fn mark_used(
+    state: State<'_, AppState>,
+    id: String,
+) -> Result<(), String> {
+    let conn = state.db.conn();
+    repository::mark_used(&conn, &id).map_err(|e| e.to_string())
+}
+
 // ── 忘记 ──
 
 #[tauri::command]

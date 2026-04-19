@@ -10,6 +10,7 @@ const MIGRATIONS: &[(i64, &str)] = &[
     (2, include_str!("migrations/002_settings_keys_cleanup.sql")),
     (3, include_str!("migrations/003_matched_domain_rule.sql")),
     (4, include_str!("migrations/004_pin_support.sql")),
+    (5, include_str!("migrations/005_last_used_at.sql")),
 ];
 
 /// 获取当前 schema 版本（schema_migrations 表不存在返回 0）

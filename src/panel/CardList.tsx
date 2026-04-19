@@ -54,7 +54,6 @@ export default function CardList({
             row={row}
             selected={i === selectedIndex}
             query={query}
-            index={i}
             onMouseEnter={() => onSelect(i)}
             onCopy={onCopy}
             onForget={(r) => onForget(r, i)}
