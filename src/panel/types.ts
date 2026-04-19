@@ -27,6 +27,10 @@ export interface ClipboardRow {
   /// 图片宽高（仅 content_type='image' 有值）— ingest 时存下避免前端再 decode
   image_width: number | null;
   image_height: number | null;
+  /// L1 session 归属（聚合 tab 按此分组）
+  session_id: string | null;
+  /// L1 字符串子集父 row id（on-the-fly 计算，不写 DB；聚合 tab 用于展示缩进父子）
+  parent_id: string | null;
 }
 
 export interface TodayStats {

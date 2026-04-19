@@ -77,23 +77,20 @@ export default function SessionCard({
         </div>
       </button>
 
-      {/* 展开态：items 子列表 */}
+      {/* 展开态：items 子列表（带父子结构） */}
       {expanded && (
-        <div className="bg-white border-t border-stone-200 divide-y divide-stone-100">
+        <div className="bg-white border-t border-stone-200">
           {expandLoading ? (
             <div className="px-4 py-3 text-[12px] text-stone-400">加载中…</div>
           ) : items.length === 0 ? (
             <div className="px-4 py-3 text-[12px] text-stone-400">此 session 无 items</div>
           ) : (
-            items.map((row) => (
-              <SessionItemRow
-                key={row.id}
-                row={row}
-                onPaste={() => onPasteItem(row)}
-                onPreview={() => onPreviewItem(row)}
-                onForget={() => onForgetItem(row)}
-              />
-            ))
+            <ExpandedItems
+              items={items}
+              onPasteItem={onPasteItem}
+              onPreviewItem={onPreviewItem}
+              onForgetItem={onForgetItem}
+            />
           )}
         </div>
       )}
@@ -101,13 +98,85 @@ export default function SessionCard({
   );
 }
 
+/// 把 items 按 parent_id 分组成父子树（扁平两层）展示。
+/// - parent_id=null 的是顶层（主文 / 独立片段）
+/// - parent_id 非空的挂到对应父下（缩进）
+/// - 找不到对应父的孤儿当顶层处理
+function ExpandedItems({
+  items,
+  onPasteItem,
+  onPreviewItem,
+  onForgetItem,
+}: {
+  items: ClipboardRow[];
+  onPasteItem: (row: ClipboardRow) => void;
+  onPreviewItem: (row: ClipboardRow) => void;
+  onForgetItem: (row: ClipboardRow) => void;
+}) {
+  // index by id
+  const byId = new Map(items.map((r) => [r.id, r]));
+  const childrenOf = new Map<string, ClipboardRow[]>();
+  const topLevel: ClipboardRow[] = [];
+
+  for (const row of items) {
+    const pid = row.parent_id;
+    if (pid && byId.has(pid)) {
+      const arr = childrenOf.get(pid) ?? [];
+      arr.push(row);
+      childrenOf.set(pid, arr);
+    } else {
+      topLevel.push(row);
+    }
+  }
+
+  // 顶层按 captured_at DESC（最新的主文在前）
+  topLevel.sort((a, b) => b.captured_at - a.captured_at);
+  // 子项按 captured_at ASC（按用户复制的原始顺序展示）
+  for (const [, arr] of childrenOf) {
+    arr.sort((a, b) => a.captured_at - b.captured_at);
+  }
+
+  return (
+    <div className="divide-y divide-stone-100">
+      {topLevel.map((parent) => {
+        const kids = childrenOf.get(parent.id) ?? [];
+        return (
+          <div key={parent.id}>
+            <SessionItemRow
+              row={parent}
+              isParent={kids.length > 0}
+              onPaste={() => onPasteItem(parent)}
+              onPreview={() => onPreviewItem(parent)}
+              onForget={() => onForgetItem(parent)}
+            />
+            {kids.map((k) => (
+              <SessionItemRow
+                key={k.id}
+                row={k}
+                isChild
+                onPaste={() => onPasteItem(k)}
+                onPreview={() => onPreviewItem(k)}
+                onForget={() => onForgetItem(k)}
+              />
+            ))}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 function SessionItemRow({
   row,
+  isParent,
+  isChild,
   onPaste,
   onPreview,
   onForget,
 }: {
   row: ClipboardRow;
+  isParent?: boolean;
+  isChild?: boolean;
   onPaste: () => void;
   onPreview: () => void;
   onForget: () => void;
@@ -115,8 +184,21 @@ function SessionItemRow({
   const isImage = row.content_type === "image";
   const preview = formatPreview(row, 120);
   return (
-    <div className="px-3 py-2 flex items-start gap-2 hover:bg-stone-50 group">
-      <div className="flex-1 min-w-0 text-[12px] text-stone-700 line-clamp-2 break-all">
+    <div
+      className={`flex items-start gap-2 hover:bg-stone-50 group ${
+        isChild ? "pl-7 pr-3 py-1.5 bg-stone-50/50" : "px-3 py-2"
+      } ${isParent ? "bg-stone-50/70" : ""}`}
+    >
+      {isChild && (
+        <span className="flex-shrink-0 text-stone-300 text-[14px] leading-4 self-start" title="引用自上方主文">
+          ↳
+        </span>
+      )}
+      <div
+        className={`flex-1 min-w-0 break-all ${
+          isChild ? "text-[11px] text-stone-600 line-clamp-1" : "text-[12px] text-stone-700 line-clamp-2"
+        } ${isParent ? "font-medium text-stone-900" : ""}`}
+      >
         {isImage
           ? `🖼️ ${row.image_width ?? "?"} × ${row.image_height ?? "?"}`
           : preview}

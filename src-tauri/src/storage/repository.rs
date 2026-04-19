@@ -399,7 +399,8 @@ pub fn resolve_session_id(
 ) -> Option<String> {
     let app = source_app?;
     let now = now_ms();
-    const WINDOW_MS: i64 = 5 * 60 * 1000;
+    // 10 分钟窗口：用户"读文章 + 做笔记"的自然节奏（5 分钟偏短，30 分钟太长）
+    const WINDOW_MS: i64 = 10 * 60 * 1000;
 
     let recent: Option<(String, i64)> = conn
         .query_row(
@@ -498,7 +499,13 @@ pub fn list_sessions(conn: &Connection, limit: i64) -> Result<Vec<SessionSummary
     Ok(result)
 }
 
-/// 取某 session 下所有 items（聚合 tab 展开用）
+/// 取某 session 下所有 items（聚合 tab 展开用）。
+/// 返回前做 on-the-fly 子集检测：
+/// - 若 B.content 是 A.content 的子串且 len(B) >= 10 字 → B.parent_id = A.id
+/// - 多候选父时选 content 最长的（最综合的主文）
+/// - 图片 / 空内容 / content 短于 10 字的条目跳过子集关系
+/// 不写入 DB，只 in-memory 标记给前端。schema 的 parent_id 列预留给未来 L3
+/// 云端 AI 更精细的语义父子关系标注。
 pub fn list_session_items(
     conn: &Connection,
     session_id: &str,
@@ -514,11 +521,187 @@ pub fn list_session_items(
          WHERE session_id = ?1
          ORDER BY captured_at DESC",
     )?;
-    let rows = stmt
+    let mut rows: Vec<ClipboardRow> = stmt
         .query_map(params![session_id], row_to_clipboard)?
         .filter_map(|r| r.ok())
         .collect();
+
+    compute_subset_parents(&mut rows);
     Ok(rows)
+}
+
+/// O(N²) 子集检测，session 内条目通常 < 50，实测 < 10ms。
+/// 规则：
+/// - 只处理 text / url 类型（image content 是 hash 指纹，不是用户内容）
+/// - 敏感条目跳过（打码文本不应参与子集判断）
+/// - 子片段最短 10 字符（chars，不是 bytes） — 防 "的" / "是" 等高频字被吸附
+/// - 多候选父选最长的那个（保证"主文—片段"扁平结构而非多层嵌套）
+fn compute_subset_parents(rows: &mut [ClipboardRow]) {
+    const MIN_CHILD_CHARS: usize = 10;
+
+    // 先收集候选 parent 索引（避免 borrow checker 冲突）
+    let mut assignments: Vec<(usize, String)> = Vec::new();
+
+    for (i, b) in rows.iter().enumerate() {
+        let Some(b_content) = b.content.as_deref() else { continue };
+        if b.content_type != "text" && b.content_type != "url" {
+            continue;
+        }
+        if b.sensitive_type.is_some() {
+            continue;
+        }
+        let b_chars = b_content.chars().count();
+        if b_chars < MIN_CHILD_CHARS {
+            continue;
+        }
+
+        let mut best_parent: Option<(usize, usize)> = None; // (index, parent_len_chars)
+
+        for (j, a) in rows.iter().enumerate() {
+            if i == j {
+                continue;
+            }
+            let Some(a_content) = a.content.as_deref() else { continue };
+            if a.content_type != "text" && a.content_type != "url" {
+                continue;
+            }
+            if a.sensitive_type.is_some() {
+                continue;
+            }
+            // A 必须严格长于 B 且包含 B
+            if a_content.len() <= b_content.len() {
+                continue;
+            }
+            if !a_content.contains(b_content) {
+                continue;
+            }
+            let a_chars = a_content.chars().count();
+            match best_parent {
+                None => best_parent = Some((j, a_chars)),
+                Some((_, cur_len)) if a_chars > cur_len => best_parent = Some((j, a_chars)),
+                _ => {}
+            }
+        }
+
+        if let Some((parent_idx, _)) = best_parent {
+            assignments.push((i, rows[parent_idx].id.clone()));
+        }
+    }
+
+    for (idx, pid) in assignments {
+        rows[idx].parent_id = Some(pid);
+    }
+}
+
+#[cfg(test)]
+mod subset_tests {
+    use super::*;
+
+    fn make_row(id: &str, content: &str, content_type: &str) -> ClipboardRow {
+        ClipboardRow {
+            id: id.to_string(),
+            content_hash: String::new(),
+            content: Some(content.to_string()),
+            content_type: content_type.to_string(),
+            size_bytes: None,
+            image_path: None,
+            file_path: None,
+            source_app: None,
+            source_url: None,
+            source_title: None,
+            captured_at: 0,
+            sensitive_type: None,
+            blocked_reason: None,
+            state: "captured".to_string(),
+            server_id: None,
+            occurrence_count: 1,
+            last_seen_at: None,
+            created_at: 0,
+            updated_at: 0,
+            matched_domain_rule: None,
+            pinned_at: None,
+            last_used_at: None,
+            image_width: None,
+            image_height: None,
+            session_id: Some("s1".to_string()),
+            parent_id: None,
+        }
+    }
+
+    #[test]
+    fn test_subset_child_assigned_to_longest_parent() {
+        let mut rows = vec![
+            make_row("A", "useEffect 的 cleanup 函数在组件 unmount 时执行，依赖变化时也会执行", "text"),
+            make_row("B", "useEffect 的 cleanup 函数", "text"),
+        ];
+        compute_subset_parents(&mut rows);
+        assert_eq!(rows[0].parent_id, None, "A 是最长，无父");
+        assert_eq!(rows[1].parent_id.as_deref(), Some("A"), "B 是 A 的子集");
+    }
+
+    #[test]
+    fn test_short_content_skipped() {
+        // "cleanup" 只有 7 字符 < 10，不参与子集关系
+        let mut rows = vec![
+            make_row("A", "useEffect 的 cleanup 函数执行", "text"),
+            make_row("B", "cleanup", "text"),
+        ];
+        compute_subset_parents(&mut rows);
+        assert_eq!(rows[1].parent_id, None, "B 太短，不归父");
+    }
+
+    #[test]
+    fn test_image_skipped() {
+        let mut rows = vec![
+            make_row("A", "useEffect 的 cleanup 函数执行机制详细说明", "text"),
+            make_row("B", "useEffect 的 cleanup", "image"),
+        ];
+        compute_subset_parents(&mut rows);
+        assert_eq!(rows[1].parent_id, None, "图片不参与子集");
+    }
+
+    #[test]
+    fn test_sensitive_skipped() {
+        let mut rows = vec![
+            make_row("A", "useEffect 的 cleanup 函数执行机制说明", "text"),
+            make_row("B", "useEffect 的 cleanup 函数", "text"),
+        ];
+        rows[1].sensitive_type = Some("password".to_string());
+        compute_subset_parents(&mut rows);
+        assert_eq!(rows[1].parent_id, None, "敏感条目不参与子集");
+    }
+
+    #[test]
+    fn test_multiple_parents_longest_wins() {
+        let mut rows = vec![
+            make_row("A_long", "useEffect cleanup 函数在组件卸载时执行，并在依赖变化前也触发", "text"),
+            make_row("A_mid", "useEffect cleanup 函数在组件卸载时执行", "text"),
+            make_row("B_child", "useEffect cleanup 函数", "text"),
+        ];
+        compute_subset_parents(&mut rows);
+        assert_eq!(
+            rows[2].parent_id.as_deref(),
+            Some("A_long"),
+            "B 应选最长的 A_long 作父"
+        );
+        assert_eq!(
+            rows[1].parent_id.as_deref(),
+            Some("A_long"),
+            "A_mid 也属 A_long"
+        );
+    }
+
+    #[test]
+    fn test_identical_no_parent() {
+        // 完全相同的内容（len 相等）不互为父子（DB 的 hash dedup 也不会让完全相同进同 session）
+        let mut rows = vec![
+            make_row("A", "useEffect 的 cleanup 函数触发机制", "text"),
+            make_row("B", "useEffect 的 cleanup 函数触发机制", "text"),
+        ];
+        compute_subset_parents(&mut rows);
+        assert_eq!(rows[0].parent_id, None);
+        assert_eq!(rows[1].parent_id, None);
+    }
 }
 
 /// 忘记一条记录（删除行 + 关联图片文件）
