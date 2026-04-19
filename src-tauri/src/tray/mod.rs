@@ -20,6 +20,27 @@ use tauri::{
     App, AppHandle, Manager,
 };
 
+const TRAY_ID: &str = "main-tray";
+
+/// 根据今日统计刷新 tray tooltip,hover 小图标就能看到"今日已记录 N 条"。
+/// 拿不到 stats 或 tray handle 时静默跳过(不影响 ingest 主流程)。
+pub fn refresh_tooltip(app: &AppHandle) {
+    let Some(state) = app.try_state::<AppState>() else {
+        return;
+    };
+    let stats = {
+        let conn = state.db.conn();
+        crate::storage::repository::get_today_stats(&conn).ok()
+    };
+    let tooltip = match stats {
+        Some(s) if s.captured > 0 => format!("Teamo · 今日已记录 {} 条", s.captured),
+        _ => "Teamo · 你的人生记录 Agent".to_string(),
+    };
+    if let Some(tray) = app.tray_by_id(TRAY_ID) {
+        let _ = tray.set_tooltip(Some(&tooltip));
+    }
+}
+
 /// 区分"用户点 X 关主窗"和"tray 菜单点退出 → app.exit(0)"。
 ///
 /// 背景：main window 的 CloseRequested handler 无条件 `prevent_close + hide` 会让
@@ -78,7 +99,7 @@ pub fn setup_tray(app: &App) -> tauri::Result<()> {
     // 这里的 handle 即使 drop 也不会销毁 tray；显式 `_tray` binding 只是为了代码意图清晰。
     // Windows/Linux 惯例：左键 = 主操作（切换快速面板），右键 = 展开菜单。
     // macOS 惯例：左键展开菜单（延后 Phase 4 按平台区分）。
-    let _tray = TrayIconBuilder::with_id("main-tray")
+    let _tray = TrayIconBuilder::with_id(TRAY_ID)
         .icon(icon)
         .tooltip("Teamo · 你的人生记录 Agent")
         .menu(&menu)

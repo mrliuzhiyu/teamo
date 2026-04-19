@@ -194,6 +194,9 @@ fn run_consumer(
             if let Err(e) = app.emit("clipboard:new", ()) {
                 tracing::debug!("emit clipboard:new failed: {e}");
             }
+            // 刷新 tray tooltip 显示今日计数(不 hover 也有感知:用户 hover tray
+            // 瞬间就能看"已记录 N 条",无需打开 panel)
+            crate::tray::refresh_tooltip(app);
         }
     }
 }
