@@ -246,6 +246,47 @@ pub fn list_session_items(
     repository::list_session_items(&conn, &session_id).map_err(|e| e.to_string())
 }
 
+// ── TextView 云端 session 上云（R3.2）──
+
+/// 上传 session 到 /api/memos/batch（一个 session 拼接成一条 memo）
+#[tauri::command]
+pub async fn upload_session(
+    state: State<'_, AppState>,
+    session_id: String,
+) -> Result<crate::cloud_sync::UploadSessionResult, String> {
+    // 1. Sync scope：查 items + 过滤 + 组装 payload（不跨 await）
+    let (payload, skipped, included) = {
+        let conn = state.db.conn();
+        let items = crate::storage::repository::list_session_items(&conn, &session_id)
+            .map_err(|e| format!("load session items: {e}"))?;
+        let total = items.len();
+        let filtered = crate::cloud_sync::filter_cloud_safe(&items);
+        let skipped = total - filtered.len();
+        if filtered.is_empty() {
+            return Err("此 session 无可上云内容（全部被闸门过滤）".to_string());
+        }
+        let device_id = crate::cloud_sync::get_or_create_device_id(&conn)?;
+        let memo = crate::cloud_sync::build_session_memo(&session_id, &filtered, &device_id);
+        let payload = serde_json::json!({ "memos": [memo] });
+        (payload, skipped, filtered.len())
+    };
+
+    // 2. Async 调 /api/memos/batch
+    let resp = crate::auth::http::authed_post("/api/memos/batch", &payload).await?;
+
+    let status = resp.status();
+    if !status.is_success() {
+        let text = resp.text().await.unwrap_or_default();
+        return Err(format!("上云失败（{status}）：{text}"));
+    }
+
+    Ok(crate::cloud_sync::UploadSessionResult {
+        uploaded_count: 1,
+        skipped_items: skipped,
+        included_items: included,
+    })
+}
+
 // ── TextView 云端认证（R3.1）──
 // 关键：async 命令不持 Connection 跨 await（Connection 不 Send）。
 // 架构：HTTP 请求 async → 拿结果 → 短 scope 内同步写 DB + keyring

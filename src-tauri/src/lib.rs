@@ -8,6 +8,7 @@
 
 mod auth;
 mod clipboard;
+mod cloud_sync;
 mod commands;
 mod export;
 mod filter;
@@ -91,6 +92,7 @@ pub fn run() {
             commands::auth_verify_otp,
             commands::auth_logout,
             commands::auth_state,
+            commands::upload_session,
             commands::get_data_info,
             commands::clear_all_data,
             commands::list_app_rules,

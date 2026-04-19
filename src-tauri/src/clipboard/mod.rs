@@ -396,8 +396,8 @@ fn ingest_once(
     false
 }
 
-/// 生成简单 UUID（v4 格式，不引 uuid crate）
-fn generate_id() -> String {
+/// 生成简单 UUID（v4 格式，不引 uuid crate）。pub 供 cloud_sync / 其他模块复用
+pub fn generate_id() -> String {
     use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};
     use std::time::{SystemTime, UNIX_EPOCH};

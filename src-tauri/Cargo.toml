@@ -58,6 +58,9 @@ thiserror = "2.0"
 # base64 编码（图片缩略图 data URL 传给前端）
 base64 = "0.22"
 
+# 时间格式化（memo markdown 里展示本地时区的 session 时间跨度）
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+
 [dev-dependencies]
 # 测试时创建临时目录（data-export 单测用）
 tempfile = "3"

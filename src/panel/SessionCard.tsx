@@ -1,6 +1,10 @@
+import { useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import type { ClipboardRow } from "./types";
 import type { SessionSummary } from "./useAggregated";
 import { formatPreview, formatRelativeTime } from "./utils";
+import { useAuth } from "../settings/useAuth";
+import { useToast } from "../lib/toast";
 
 interface Props {
   session: SessionSummary;
@@ -18,6 +22,12 @@ interface Props {
 /// - 展开态：session 内所有 items（类似文件夹展开）
 ///
 /// 暂不做组级操作（上云/pin 整组），R3 上云时补。
+interface UploadResult {
+  uploaded_count: number;
+  skipped_items: number;
+  included_items: number;
+}
+
 export default function SessionCard({
   session,
   expanded,
@@ -29,53 +39,104 @@ export default function SessionCard({
   onForgetItem,
 }: Props) {
   const timeSpan = formatTimeSpan(session.started_at, session.ended_at);
+  const { state: authState } = useAuth();
+  const toast = useToast();
+  const [uploading, setUploading] = useState(false);
+  const [uploadedOnce, setUploadedOnce] = useState(false);
+
+  const handleUpload = async (e: React.MouseEvent) => {
+    e.stopPropagation(); // 防止点按钮时误触发展开
+    if (!authState?.logged_in) {
+      toast("error", "请先在设置里登录 TextView");
+      return;
+    }
+    setUploading(true);
+    try {
+      const result = await invoke<UploadResult>("upload_session", {
+        sessionId: session.session_id,
+      });
+      const msg =
+        result.skipped_items > 0
+          ? `已上云 ${result.included_items} 条 · 跳过 ${result.skipped_items} 条（敏感/图片）`
+          : `已上云 ${result.included_items} 条`;
+      toast("success", msg);
+      setUploadedOnce(true);
+    } catch (err) {
+      toast("error", `上云失败：${err}`);
+    } finally {
+      setUploading(false);
+    }
+  };
 
   return (
     <div className="rounded-lg bg-stone-100 overflow-hidden">
-      {/* 卡片头：点击展开 */}
-      <button
-        onClick={onToggleExpand}
-        className="w-full text-left px-3 py-2.5 flex items-start gap-2 hover:bg-stone-200 transition-colors"
-      >
-        <div className="flex-shrink-0 mt-0.5 text-stone-400">
-          <svg
-            width="10"
-            height="10"
-            viewBox="0 0 10 10"
-            className={`transition-transform ${expanded ? "rotate-90" : ""}`}
-          >
-            <path d="M3 2L7 5L3 8" stroke="currentColor" strokeWidth="1.5" fill="none" strokeLinecap="round" strokeLinejoin="round" />
-          </svg>
-        </div>
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2 text-[11px] text-stone-500 mb-0.5">
-            {session.primary_source_app && (
-              <span className="text-stone-700 font-medium truncate max-w-[140px]">
-                {session.primary_source_app}
-              </span>
-            )}
-            <span className="px-1.5 py-0.5 rounded bg-stone-200/60 text-stone-600 flex-shrink-0">
-              {session.item_count} 条
-            </span>
-            {session.has_image && (
-              <span className="px-1.5 py-0.5 rounded bg-emerald-100/60 text-emerald-700 flex-shrink-0" title="含图片">
-                📷
-              </span>
-            )}
-            {session.has_sensitive && (
-              <span className="px-1.5 py-0.5 rounded bg-amber-100/60 text-amber-700 flex-shrink-0" title="含敏感内容">
-                🔒
-              </span>
-            )}
-            <span className="ml-auto text-stone-400 flex-shrink-0" title={new Date(session.ended_at).toLocaleString()}>
-              {timeSpan}
-            </span>
+      {/* 卡片头：点击展开 + 右上角上云按钮 */}
+      <div className="relative">
+        <button
+          onClick={onToggleExpand}
+          className="w-full text-left px-3 py-2.5 flex items-start gap-2 hover:bg-stone-200 transition-colors"
+        >
+          <div className="flex-shrink-0 mt-0.5 text-stone-400">
+            <svg
+              width="10"
+              height="10"
+              viewBox="0 0 10 10"
+              className={`transition-transform ${expanded ? "rotate-90" : ""}`}
+            >
+              <path d="M3 2L7 5L3 8" stroke="currentColor" strokeWidth="1.5" fill="none" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
           </div>
-          <div className="text-sm text-stone-800 line-clamp-2 break-all">
-            {session.first_preview}
+          <div className="flex-1 min-w-0 pr-16">
+            <div className="flex items-center gap-2 text-[11px] text-stone-500 mb-0.5">
+              {session.primary_source_app && (
+                <span className="text-stone-700 font-medium truncate max-w-[140px]">
+                  {session.primary_source_app}
+                </span>
+              )}
+              <span className="px-1.5 py-0.5 rounded bg-stone-200/60 text-stone-600 flex-shrink-0">
+                {session.item_count} 条
+              </span>
+              {session.has_image && (
+                <span className="px-1.5 py-0.5 rounded bg-emerald-100/60 text-emerald-700 flex-shrink-0" title="含图片">
+                  📷
+                </span>
+              )}
+              {session.has_sensitive && (
+                <span className="px-1.5 py-0.5 rounded bg-amber-100/60 text-amber-700 flex-shrink-0" title="含敏感内容">
+                  🔒
+                </span>
+              )}
+              <span className="ml-auto text-stone-400 flex-shrink-0" title={new Date(session.ended_at).toLocaleString()}>
+                {timeSpan}
+              </span>
+            </div>
+            <div className="text-sm text-stone-800 line-clamp-2 break-all">
+              {session.first_preview}
+            </div>
           </div>
-        </div>
-      </button>
+        </button>
+        {/* 上云按钮：绝对定位右上，点击不触发展开 */}
+        <button
+          onClick={handleUpload}
+          disabled={uploading || !authState?.logged_in}
+          className={`absolute right-2 top-2 text-[10px] px-2 py-0.5 rounded shadow-sm transition-colors ${
+            uploadedOnce
+              ? "bg-emerald-50 text-emerald-700 border border-emerald-200"
+              : authState?.logged_in
+                ? "bg-white text-stone-600 border border-stone-200 hover:bg-stone-50"
+                : "bg-stone-50 text-stone-400 border border-stone-200 cursor-not-allowed"
+          }`}
+          title={
+            !authState?.logged_in
+              ? "登录 TextView 后可上云"
+              : uploadedOnce
+                ? "已上云（可再次上云覆盖）"
+                : "将此 session 整理成 memo 上云"
+          }
+        >
+          {uploading ? "⏳ 上云中" : uploadedOnce ? "✓ 已上云" : "📤 上云"}
+        </button>
+      </div>
 
       {/* 展开态：items 子列表（带父子结构） */}
       {expanded && (
