@@ -133,6 +133,10 @@ export default function PanelApp() {
       // 有 modal dialog 开着时不拦快捷键（Esc / Space 让 dialog 自己处理）
       if (document.querySelector('[data-teamo-dialog="open"]')) return;
 
+      // IME 输入合成中（中文拼音候选未确认）一律不处理 —— 中文用户搜索时按 Enter
+      // 是确认候选词，不是触发粘贴。e.isComposing 是浏览器标准属性
+      if (e.isComposing) return;
+
       // F3 或 Space（仅当搜索框为空）→ 打开预览浮层（对标 Ditto F3 / CopyQ F7）
       if (e.key === "F3" || (e.key === " " && panel.query === "")) {
         const row = panel.list[panel.selectedIndex];
@@ -143,8 +147,13 @@ export default function PanelApp() {
         return;
       }
 
+      // Esc 渐进退出（VSCode / Obsidian 惯例）：搜索框非空时先清空搜索，再按才关 panel
       if (e.key === "Escape") {
         e.preventDefault();
+        if (panel.query) {
+          panel.setQuery("");
+          return;
+        }
         void hidePanel();
         return;
       }
@@ -158,6 +167,32 @@ export default function PanelApp() {
         e.preventDefault();
         if (panel.list.length === 0) return;
         panel.setSelectedIndex(Math.max(panel.selectedIndex - 1, 0));
+        return;
+      }
+      // Home / End 跳首尾 —— 大列表快速导航
+      if (e.key === "Home") {
+        e.preventDefault();
+        if (panel.list.length === 0) return;
+        panel.setSelectedIndex(0);
+        return;
+      }
+      if (e.key === "End") {
+        e.preventDefault();
+        if (panel.list.length === 0) return;
+        panel.setSelectedIndex(panel.list.length - 1);
+        return;
+      }
+      // PageUp / PageDown 翻 10 条
+      if (e.key === "PageUp") {
+        e.preventDefault();
+        if (panel.list.length === 0) return;
+        panel.setSelectedIndex(Math.max(panel.selectedIndex - 10, 0));
+        return;
+      }
+      if (e.key === "PageDown") {
+        e.preventDefault();
+        if (panel.list.length === 0) return;
+        panel.setSelectedIndex(Math.min(panel.selectedIndex + 10, panel.list.length - 1));
         return;
       }
       if (e.key === "Enter") {
