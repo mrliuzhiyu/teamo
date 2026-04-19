@@ -20,11 +20,13 @@ export default function PreviewOverlay({ row, onClose }: Props) {
   const [imgDataUrl, setImgDataUrl] = useState<string | null>(null);
   const [imgDims, setImgDims] = useState<{ w: number; h: number } | null>(null);
   const [imgLoading, setImgLoading] = useState(false);
+  const [imgError, setImgError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!isImage) return;
     let cancelled = false;
     setImgLoading(true);
+    setImgError(null);
     // maxSize=null 明确要原图（不缩放），PreviewOverlay 要全尺寸看清内容
     invoke<string>("get_image_data_url", { id: row.id, maxSize: null })
       .then((url) => {
@@ -33,9 +35,10 @@ export default function PreviewOverlay({ row, onClose }: Props) {
           setImgLoading(false);
         }
       })
-      .catch(() => {
+      .catch((e) => {
         if (!cancelled) {
           setImgDataUrl(null);
+          setImgError(`读取失败：${e}`);
           setImgLoading(false);
         }
       });
@@ -90,7 +93,21 @@ export default function PreviewOverlay({ row, onClose }: Props) {
             </svg>
           </button>
         </div>
-        <div className="overflow-auto flex-1 flex items-center justify-center bg-stone-50/50">
+        <div
+          className="overflow-auto flex-1 flex items-center justify-center"
+          style={
+            isImage
+              ? {
+                  // 棋盘格背景:让纯白/透明图片可辨(参考 PS/Figma 透明指示)
+                  backgroundImage:
+                    "linear-gradient(45deg, #e7e5e4 25%, transparent 25%), linear-gradient(-45deg, #e7e5e4 25%, transparent 25%), linear-gradient(45deg, transparent 75%, #e7e5e4 75%), linear-gradient(-45deg, transparent 75%, #e7e5e4 75%)",
+                  backgroundSize: "16px 16px",
+                  backgroundPosition: "0 0, 0 8px, 8px -8px, -8px 0",
+                  backgroundColor: "#fafaf9",
+                }
+              : undefined
+          }
+        >
           {isImage ? (
             imgLoading ? (
               <div className="text-stone-400 text-[12px] py-8">加载图片中…</div>
@@ -102,10 +119,13 @@ export default function PreviewOverlay({ row, onClose }: Props) {
                   const img = e.currentTarget;
                   setImgDims({ w: img.naturalWidth, h: img.naturalHeight });
                 }}
-                className="max-w-full max-h-full object-contain"
+                onError={() => setImgError("图片数据损坏或格式不支持")}
+                className="max-w-full max-h-full object-contain shadow-[0_0_0_1px_rgba(0,0,0,0.08)]"
               />
             ) : (
-              <div className="text-red-500 text-[12px] py-8">图片加载失败 — 文件可能已丢失</div>
+              <div className="text-red-500 text-[12px] py-8 px-4 text-center">
+                {imgError ?? "图片加载失败 — 文件可能已丢失"}
+              </div>
             )
           ) : (
             <div className="w-full px-4 py-3 text-[12px] text-stone-800 whitespace-pre-wrap break-all font-mono leading-relaxed self-start">
