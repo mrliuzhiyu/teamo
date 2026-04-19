@@ -9,7 +9,7 @@ interface Props {
 /// 时间选项是过度设计；用户要记录敏感信息时点一下暂停、做完再点一下恢复。
 export default function ActionBar({ isPaused, onTogglePause, onOpenSettings }: Props) {
   return (
-    <div className="px-2 py-1.5 border-t border-stone-200 bg-stone-50 flex items-center gap-1 text-[11px]">
+    <div className="px-2 py-1.5 bg-stone-50 flex items-center gap-1 text-[11px]">
       <button
         onClick={onTogglePause}
         className="px-2 py-1 rounded hover:bg-stone-200 text-stone-600 transition-colors"

@@ -15,7 +15,7 @@ export default function StatsHeader({ stats, isPaused, onClose }: Props) {
   const blocked = stats?.blocked ?? 0;
 
   return (
-    <div className="flex items-center gap-2 px-3 py-2 text-[11px] text-stone-500 border-b border-stone-200 bg-white/70">
+    <div className="flex items-center gap-2 px-3 py-2 text-[11px] text-stone-500 bg-stone-50">
       {/* 拖动区：状态点 + 统计文字。点这块区域可拖动窗口 */}
       <div
         data-tauri-drag-region

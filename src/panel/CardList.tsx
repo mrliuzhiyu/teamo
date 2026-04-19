@@ -81,7 +81,7 @@ export default function CardList({
   }
 
   return (
-    <div ref={containerRef} className="flex-1 overflow-y-auto px-2 py-2 space-y-1.5 bg-stone-50/40">
+    <div ref={containerRef} className="flex-1 overflow-y-auto px-2 py-2 space-y-1.5 bg-white">
       {list.map((row, i) => (
         <div key={row.id} data-idx={i}>
           <CardItem

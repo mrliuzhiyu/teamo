@@ -11,7 +11,7 @@ const SearchBar = forwardRef<HTMLInputElement, Props>(function SearchBar(
   ref,
 ) {
   return (
-    <div className="relative px-3 py-2 border-b border-stone-200 bg-white">
+    <div className="relative px-3 py-2 bg-stone-50">
       <input
         ref={ref}
         type="text"

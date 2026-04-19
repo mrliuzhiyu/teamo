@@ -17,9 +17,9 @@ interface Props {
 }
 
 const badgeClass: Record<string, string> = {
-  local: "bg-stone-100 text-stone-500",
-  cloud: "bg-emerald-50 text-emerald-700",
-  blocked: "bg-amber-50 text-amber-700",
+  local: "bg-stone-200/60 text-stone-500",
+  cloud: "bg-emerald-100/60 text-emerald-700",
+  blocked: "bg-amber-100/60 text-amber-700",
 };
 
 export default function CardItem({
@@ -36,20 +36,32 @@ export default function CardItem({
   const isImage = row.content_type === "image" && row.image_path;
   const isPinned = row.pinned_at !== null && row.pinned_at !== undefined;
   const badge = getStateBadge(row);
-  // 搜索模式下传 query 给 formatPreview 触发命中片段摘要（长文命中在后半段不被 line-clamp 吃掉）
   const preview = formatPreview(row, 80, query);
   const parts = row.sensitive_type ? [{ text: preview, hit: false }] : highlightMatches(preview, query);
 
-  // 图片缩略图：一次 invoke 读 data URL，缓存在 state
+  // 图片缩略图 + 自动解析尺寸显示（后端返 128 缩略后浏览器 naturalWidth 是缩略尺寸）
   const [thumbnail, setThumbnail] = useState<string | null>(null);
+  const [imgDims, setImgDims] = useState<{ w: number; h: number } | null>(null);
   useEffect(() => {
     if (!isImage) return;
     let cancelled = false;
-    // max_size=128 让后端缩到 128×128 保持宽高比 + 重新编码 PNG，
-    // 对 1920×1080 截图 ~1MB → ~5KB 缩略图（IPC 小 200 倍）
+    // 拿缩略图用于列表显示
     invoke<string>("get_image_data_url", { id: row.id, maxSize: 128 })
       .then((url) => !cancelled && setThumbnail(url))
       .catch(() => !cancelled && setThumbnail(null));
+    // 单独请求一次原图元数据拿真实尺寸（只做 HEAD 代价：后端会重新读文件 + 解码头，为了
+    // 简化先用前端临时 Image 对象读原图尺寸）—— 这里偷懒用另一次 invoke 返回原图后从
+    // 浏览器 new Image() 读 naturalWidth，成本 = 一张图解码一次。对 20 条列表 ~100ms 内可接受
+    invoke<string>("get_image_data_url", { id: row.id, maxSize: null })
+      .then((url) => {
+        if (cancelled) return;
+        const img = new Image();
+        img.onload = () => {
+          if (!cancelled) setImgDims({ w: img.naturalWidth, h: img.naturalHeight });
+        };
+        img.src = url;
+      })
+      .catch(() => undefined);
     return () => {
       cancelled = true;
     };
@@ -73,11 +85,10 @@ export default function CardItem({
 
   const handleContextMenu = (e: ReactMouseEvent) => {
     e.preventDefault();
-    // 菜单预估 140×100，超出窗口边界则向左/向上翻转
     const W = window.innerWidth;
     const H = window.innerHeight;
     const x = e.clientX + 140 > W ? e.clientX - 140 : e.clientX;
-    const y = e.clientY + 100 > H ? e.clientY - 100 : e.clientY;
+    const y = e.clientY + 140 > H ? e.clientY - 140 : e.clientY;
     setMenu({ x, y });
   };
 
@@ -92,40 +103,56 @@ export default function CardItem({
     fn();
   };
 
+  // 块化设计：
+  // - 卡片去 border，用浅灰 stone-100 填充（列表容器是 white 会让卡片"凸"出）
+  // - selected 态：stone-200 更深灰 + 淡 ring 提示键盘焦点
+  // - pinned 态：amber-100 暖色（保留 pin 识别度）
+  // - 鼠标党主动作用右键菜单 "粘贴"；双击不再关闭 panel 避免快速点击误触发
+  // tailwind stone 没 150 色阶；selected 用 stone-200 + ring 区分，hover 态也用 stone-200
+  //（hover 时和 selected 相同颜色视觉 OK，因为 selected 带 ring 可区分）
+  const baseBg = selected
+    ? "bg-stone-200"
+    : isPinned
+      ? "bg-amber-100 hover:bg-amber-200/70"
+      : "bg-stone-100 hover:bg-stone-200";
+
   return (
     <div
       data-selected={selected}
       onMouseEnter={onMouseEnter}
-      onDoubleClick={() => onEnter(row)}
       onContextMenu={handleContextMenu}
-      className={`relative px-3 py-2.5 rounded-lg border cursor-pointer transition-all group ${
-        selected
-          ? "bg-stone-50 border-stone-300 shadow-sm"
-          : isPinned
-            ? "bg-amber-50/30 border-amber-200/60 hover:bg-amber-50/50"
-            : "bg-white border-stone-200 hover:bg-stone-50/60 hover:border-stone-300"
+      className={`relative px-3 py-2.5 rounded-lg transition-colors group ${baseBg} ${
+        selected ? "ring-1 ring-stone-300" : ""
       }`}
-      title="双击粘贴 · Space 预览 · 右键更多操作"
+      title="右键更多操作 · Enter 粘贴 · Space 预览"
     >
       {isImage ? (
-        <div className="flex items-start gap-3 pr-24">
-          <div className="flex-shrink-0 w-16 h-16 rounded border border-stone-200 bg-stone-100 overflow-hidden flex items-center justify-center">
+        <div className="flex items-start gap-3 pr-20">
+          {/* 点击缩略图 → 直接打开全尺寸预览（之前用户反馈"看不了截的图"） */}
+          <button
+            onClick={stopAnd(() => onPreview(row))}
+            className="flex-shrink-0 w-16 h-16 rounded bg-white overflow-hidden flex items-center justify-center hover:ring-2 hover:ring-stone-300 transition-all cursor-zoom-in"
+            title="点击查看全尺寸"
+          >
             {thumbnail ? (
               <img src={thumbnail} alt="截图" className="max-w-full max-h-full object-contain" />
             ) : (
               <span className="text-[10px] text-stone-400">加载中</span>
             )}
-          </div>
-          <div className="flex-1 min-w-0 text-[12px] text-stone-500">
-            <div className="text-stone-700">截图</div>
-            <div className="mt-0.5 truncate">{row.image_path}</div>
+          </button>
+          <div className="flex-1 min-w-0 text-[12px] text-stone-600">
+            <div className="text-stone-800 font-medium">截图</div>
+            <div className="mt-0.5 text-stone-500 truncate">
+              {imgDims ? `${imgDims.w} × ${imgDims.h}` : "尺寸加载中"}
+              {row.source_app && ` · 来自 ${row.source_app}`}
+            </div>
           </div>
         </div>
       ) : (
-        <div className="text-sm text-stone-800 break-all line-clamp-2 pr-24">
+        <div className="text-sm text-stone-800 break-all line-clamp-2 pr-20">
           {parts.map((p, i) =>
             p.hit ? (
-              <mark key={i} className="bg-amber-100 text-stone-900 rounded px-0.5">
+              <mark key={i} className="bg-amber-200 text-stone-900 rounded px-0.5">
                 {p.text}
               </mark>
             ) : (
@@ -135,15 +162,17 @@ export default function CardItem({
         </div>
       )}
 
-      <div className="mt-1.5 flex items-center gap-2 text-[11px] text-stone-400">
+      <div className="mt-1.5 flex items-center gap-2 text-[11px] text-stone-500">
         <span className={`px-1.5 py-0.5 rounded ${badgeClass[badge.tone]}`}>{badge.label}</span>
-        {row.source_app && <span className="truncate max-w-[120px]">{row.source_app}</span>}
+        {!isImage && row.source_app && (
+          <span className="truncate max-w-[120px]">{row.source_app}</span>
+        )}
         <span className="ml-auto" title={new Date(row.captured_at).toLocaleString()}>
           {formatRelativeTime(row.captured_at)}
         </span>
       </div>
 
-      {/* 操作按钮：hover 或选中都显示（鼠标党 / 键盘党都友好） */}
+      {/* 操作按钮：hover 或选中都显示 */}
       <div
         className={`absolute right-2 top-2 flex items-center gap-1 transition-opacity ${
           selected ? "opacity-100" : "opacity-0 group-hover:opacity-100"
@@ -151,14 +180,14 @@ export default function CardItem({
       >
         <button
           onClick={stopAnd(() => onCopy(row))}
-          className="px-2 py-0.5 text-[11px] bg-white border border-stone-200 rounded hover:bg-stone-100 text-stone-600 shadow-sm"
+          className="px-2 py-0.5 text-[11px] bg-white rounded hover:bg-stone-50 text-stone-600 shadow-sm"
           title="仅复制（不关闭、不自动粘贴）"
         >
           仅复制
         </button>
         <button
           onClick={stopAnd(() => onForget(row))}
-          className="px-2 py-0.5 text-[11px] bg-white border border-stone-200 rounded hover:bg-red-50 hover:border-red-200 hover:text-red-600 text-stone-600 shadow-sm"
+          className="px-2 py-0.5 text-[11px] bg-white rounded hover:bg-red-50 hover:text-red-600 text-stone-600 shadow-sm"
           title="忘记这条"
         >
           忘记
@@ -177,7 +206,7 @@ export default function CardItem({
               onClick={closeMenuAnd(() => onEnter(row))}
               className="w-full text-left px-3 py-1.5 hover:bg-stone-100 text-stone-700"
             >
-              粘贴到当前窗口
+              粘贴到当前窗口 <span className="text-stone-400 text-[10px] ml-1">Enter</span>
             </button>
             <button
               onClick={closeMenuAnd(() => onCopy(row))}
@@ -189,7 +218,8 @@ export default function CardItem({
               onClick={closeMenuAnd(() => onPreview(row))}
               className="w-full text-left px-3 py-1.5 hover:bg-stone-100 text-stone-700"
             >
-              查看全文 <span className="text-stone-400 text-[10px] ml-1">Space</span>
+              {isImage ? "查看大图" : "查看全文"}{" "}
+              <span className="text-stone-400 text-[10px] ml-1">Space</span>
             </button>
             <div className="my-1 border-t border-stone-100" />
             <button
