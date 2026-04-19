@@ -136,6 +136,18 @@ pub fn run() {
                 }
             }
 
+            // 2d. 孤儿 PNG 清理：capture 流程是"先写 PNG → INSERT row"两步非原子，
+            //     崩溃/kill 时 PNG 已存但 DB 行缺失，长期积累 images/ 会膨胀
+            {
+                let conn = db.conn();
+                let images_dir = db.images_dir();
+                match storage::reconcile::cleanup_orphan_images(&conn, &images_dir) {
+                    Ok(n) if n > 0 => tracing::info!("cleaned {n} orphan image(s) on startup"),
+                    Ok(_) => {}
+                    Err(e) => tracing::warn!("orphan image cleanup failed: {e}"),
+                }
+            }
+
             // 3. 初始化捕获状态（检查是否有持久化的暂停状态）
             let capture_state = Arc::new(clipboard::CaptureState::new());
             {

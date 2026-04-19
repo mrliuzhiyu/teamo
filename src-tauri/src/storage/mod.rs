@@ -4,6 +4,7 @@
 
 pub mod canonicalize;
 pub mod error;
+pub mod reconcile;
 pub mod repository;
 pub mod retention;
 pub mod schema;

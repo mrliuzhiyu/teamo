@@ -193,29 +193,74 @@ pub fn activate_and_paste(handle: Option<ForegroundHandle>) -> Result<(), String
         use std::thread::sleep;
         use std::time::Duration;
 
-        if let Some(h) = handle {
-            unsafe {
-                use winapi::shared::windef::HWND;
-                use winapi::um::winuser::SetForegroundWindow;
-                let ok = SetForegroundWindow(h.hwnd as HWND);
-                if ok == 0 {
-                    // 失败必须 return Err：如果继续模拟 Ctrl+V，热键会打到当前
-                    // 前景窗口（可能是 Teamo 自己、或刚才 panel hide 后的任意窗口），
-                    // 把剪贴板粘贴到用户根本不期望的地方。让前端降级为"只复制不粘贴"。
-                    // 用户已经拿到剪贴板内容，手动 Ctrl+V 即可。
-                    tracing::warn!(
-                        "SetForegroundWindow failed for hwnd={:#x}; target minimized/gone. \
-                         Content is in clipboard, user can Ctrl+V manually.",
-                        h.hwnd
-                    );
-                    return Err("SetForegroundWindow failed; target window unavailable".into());
-                }
+        let h = handle.ok_or_else(|| "no foreground handle captured".to_string())?;
+
+        unsafe {
+            use winapi::shared::windef::HWND;
+            use winapi::um::processthreadsapi::GetCurrentThreadId;
+            use winapi::um::winuser::{
+                AttachThreadInput, GetForegroundWindow, GetWindowThreadProcessId, IsIconic,
+                SetForegroundWindow, SetWindowPos, ShowWindow, HWND_TOP, SWP_NOMOVE, SWP_NOSIZE,
+                SWP_SHOWWINDOW, SW_RESTORE,
+            };
+
+            let hwnd = h.hwnd as HWND;
+
+            // 1) 目标窗口最小化 → 先恢复（照抄 Ditto SendKeys.cpp AppActivate 的 SC_RESTORE trick）
+            //    否则 SetForegroundWindow 对 iconic 窗口只闪任务栏，不真正激活
+            if IsIconic(hwnd) != 0 {
+                ShowWindow(hwnd, SW_RESTORE);
             }
-            sleep(Duration::from_millis(30));
-        } else {
-            tracing::debug!("activate_and_paste: no prev handle, skipping SetForegroundWindow");
-            return Err("no foreground handle captured".into());
+
+            // 2) AttachThreadInput trick（照抄 CopyQ winplatformwindow.cpp raiseWindow）：
+            //    Windows 的 foreground lock 只允许"前景线程"调 SetForegroundWindow。
+            //    Teamo panel 已 hide，当前前景是别的窗口 → 把我们的线程 attach 到
+            //    当前前景线程，绕开 lock 后调 SFW，再 detach。
+            //    注意：attach 的是**当前 foreground** 的 thread，不是 target 的 thread。
+            let this_thread = GetCurrentThreadId();
+            let fg_hwnd = GetForegroundWindow();
+            let fg_thread = if !fg_hwnd.is_null() {
+                GetWindowThreadProcessId(fg_hwnd, std::ptr::null_mut())
+            } else {
+                0
+            };
+
+            let attached = this_thread != fg_thread
+                && fg_thread != 0
+                && AttachThreadInput(this_thread, fg_thread, 1) != 0;
+
+            let ok = SetForegroundWindow(hwnd);
+
+            // 3) 强制 z-order 顶层（SetForegroundWindow 有时只激活不置顶，被弹窗遮挡会粘丢）
+            if ok != 0 {
+                SetWindowPos(
+                    hwnd,
+                    HWND_TOP,
+                    0,
+                    0,
+                    0,
+                    0,
+                    SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW,
+                );
+            }
+
+            // 4) detach（必须与 attach 配对，否则线程输入队列泄漏）
+            if attached {
+                AttachThreadInput(this_thread, fg_thread, 0);
+            }
+
+            if ok == 0 {
+                tracing::warn!(
+                    "SetForegroundWindow failed for hwnd={:#x} even with AttachThreadInput trick; \
+                     target likely closed or protected. Content is in clipboard, user can Ctrl+V manually.",
+                    h.hwnd
+                );
+                return Err(
+                    "SetForegroundWindow failed; target window unavailable".into(),
+                );
+            }
         }
+        sleep(Duration::from_millis(30));
 
         use enigo::{Direction, Enigo, Key, Keyboard, Settings};
         let mut enigo = Enigo::new(&Settings::default())
