@@ -300,7 +300,7 @@ export default function PanelApp() {
             <kbd className="px-1 py-0.5 bg-white border border-stone-200 rounded text-[9px]">Space</kbd>
             <span>预览</span>
             <kbd className="px-1 py-0.5 bg-white border border-stone-200 rounded text-[9px]">Del</kbd>
-            <span>忘记</span>
+            <span>删除</span>
             {panel.error && <span className="ml-auto text-red-500 truncate">{panel.error}</span>}
           </div>
         </>

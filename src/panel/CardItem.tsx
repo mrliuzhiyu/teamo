@@ -176,9 +176,9 @@ export default function CardItem({
         <button
           onClick={stopAnd(() => onForget(row))}
           className="px-2 py-0.5 text-[11px] bg-white rounded hover:bg-red-50 hover:text-red-600 text-stone-600 shadow-sm"
-          title="忘记这条"
+          title="删除这条"
         >
-          忘记
+          删除
         </button>
       </div>
 
@@ -221,7 +221,7 @@ export default function CardItem({
               onClick={closeMenuAnd(() => onForget(row))}
               className="w-full text-left px-3 py-1.5 hover:bg-red-50 text-red-600"
             >
-              忘记这条
+              删除这条
             </button>
           </div>,
           document.body,

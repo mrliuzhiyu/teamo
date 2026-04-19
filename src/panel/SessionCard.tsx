@@ -283,9 +283,9 @@ function SessionItemRow({
         <button
           onClick={onForget}
           className="text-[10px] px-1.5 py-0.5 rounded bg-white hover:bg-red-50 hover:text-red-600 text-stone-500 shadow-sm"
-          title="忘记这条"
+          title="删除这条"
         >
-          忘记
+          删除
         </button>
       </div>
       <span className="flex-shrink-0 text-[10px] text-stone-400 self-center" title={new Date(row.captured_at).toLocaleString()}>
