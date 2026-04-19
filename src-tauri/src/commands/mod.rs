@@ -81,13 +81,23 @@ pub fn get_today_stats(
 // ── 图片缩略图（data URL）──
 
 /// 读取 image 类型记录的 PNG 文件，返回 `data:image/png;base64,...` URL，
-/// 供快速面板的 <img> 标签直接渲染为缩略图（浏览器 CSS 自动缩放）。
+/// 供快速面板 <img> 标签直接渲染。
+///
+/// 参数 `max_size`（可选）：
+/// - `Some(n)`：缩放到最大 n×n（保持宽高比）再编码 PNG，用于**列表缩略图**。
+///   1920×1080 原图 ~1MB → 128×128 缩略 ~5KB，20 条 image 列表从 ~20MB 降到
+///   ~100KB，IPC 传输 + 前端渲染 O(10ms) 对比 O(数百ms)。
+/// - `None`：原图 base64，用于 PreviewOverlay 全尺寸预览。
 ///
 /// 为什么不用 asset protocol：tauri 2.x asset 需要 capabilities fs:allow-read +
 /// scope 配置 data_dir 路径，而 data_dir 是 runtime 决定的动态路径。base64 方案
-/// 零权限配置，对 ~500KB 的截图 overhead 可接受（一次加载 20 张 ~ 10MB）。
+/// 零权限配置。
 #[tauri::command]
-pub fn get_image_data_url(state: State<'_, AppState>, id: String) -> Result<String, String> {
+pub fn get_image_data_url(
+    state: State<'_, AppState>,
+    id: String,
+    max_size: Option<u32>,
+) -> Result<String, String> {
     use base64::{engine::general_purpose::STANDARD, Engine as _};
 
     let filename = {
@@ -101,7 +111,25 @@ pub fn get_image_data_url(state: State<'_, AppState>, id: String) -> Result<Stri
     let path = state.db.images_dir().join(&filename);
     let bytes = std::fs::read(&path)
         .map_err(|e| format!("read {}: {}", path.display(), e))?;
-    Ok(format!("data:image/png;base64,{}", STANDARD.encode(&bytes)))
+
+    // 原图模式：直接 base64（PreviewOverlay 走这条）
+    let Some(max) = max_size else {
+        return Ok(format!("data:image/png;base64,{}", STANDARD.encode(&bytes)));
+    };
+
+    // 缩略图模式：decode → thumbnail → re-encode PNG（CardItem 列表走这条）
+    let img = image::load_from_memory(&bytes)
+        .map_err(|e| format!("decode image failed: {e}"))?;
+    // thumbnail 保持宽高比，输出宽高 ≤ max×max（image crate 用 lanczos3 算法质量高）
+    let thumb = img.thumbnail(max, max);
+    let mut out: Vec<u8> = Vec::new();
+    thumb
+        .write_to(
+            &mut std::io::Cursor::new(&mut out),
+            image::ImageFormat::Png,
+        )
+        .map_err(|e| format!("encode thumbnail failed: {e}"))?;
+    Ok(format!("data:image/png;base64,{}", STANDARD.encode(&out)))
 }
 
 // ── 图片复制到剪切板 ──

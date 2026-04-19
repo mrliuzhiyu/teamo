@@ -45,7 +45,9 @@ export default function CardItem({
   useEffect(() => {
     if (!isImage) return;
     let cancelled = false;
-    invoke<string>("get_image_data_url", { id: row.id })
+    // max_size=128 让后端缩到 128×128 保持宽高比 + 重新编码 PNG，
+    // 对 1920×1080 截图 ~1MB → ~5KB 缩略图（IPC 小 200 倍）
+    invoke<string>("get_image_data_url", { id: row.id, maxSize: 128 })
       .then((url) => !cancelled && setThumbnail(url))
       .catch(() => !cancelled && setThumbnail(null));
     return () => {

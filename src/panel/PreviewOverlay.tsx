@@ -25,7 +25,8 @@ export default function PreviewOverlay({ row, onClose }: Props) {
     if (!isImage) return;
     let cancelled = false;
     setImgLoading(true);
-    invoke<string>("get_image_data_url", { id: row.id })
+    // maxSize=null 明确要原图（不缩放），PreviewOverlay 要全尺寸看清内容
+    invoke<string>("get_image_data_url", { id: row.id, maxSize: null })
       .then((url) => {
         if (!cancelled) {
           setImgDataUrl(url);
