@@ -3,14 +3,17 @@ import ReactDOM from "react-dom/client";
 import PanelApp from "./PanelApp";
 import { ToastProvider } from "../lib/toast";
 import { ConfirmProvider } from "../lib/ConfirmDialog";
+import ErrorBoundary from "../lib/ErrorBoundary";
 import "../index.css";
 
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
   <React.StrictMode>
-    <ToastProvider>
-      <ConfirmProvider>
-        <PanelApp />
-      </ConfirmProvider>
-    </ToastProvider>
+    <ErrorBoundary label="Panel 根节点">
+      <ToastProvider>
+        <ConfirmProvider>
+          <PanelApp />
+        </ConfirmProvider>
+      </ToastProvider>
+    </ErrorBoundary>
   </React.StrictMode>,
 );

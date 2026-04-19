@@ -3,6 +3,7 @@ import Privacy from "../settings/sections/Privacy";
 import Cloud from "../settings/sections/Cloud";
 import Data from "../settings/sections/Data";
 import About from "../settings/sections/About";
+import ErrorBoundary from "../lib/ErrorBoundary";
 
 interface Props {
   onBack: () => void;
@@ -41,11 +42,21 @@ export default function PanelSettings({ onBack }: Props) {
         </div>
       </header>
       <div className="flex-1 overflow-y-auto py-3">
-        <General />
-        <Privacy />
-        <Cloud />
-        <Data />
-        <About />
+        <ErrorBoundary label="General">
+          <General />
+        </ErrorBoundary>
+        <ErrorBoundary label="Privacy">
+          <Privacy />
+        </ErrorBoundary>
+        <ErrorBoundary label="Cloud">
+          <Cloud />
+        </ErrorBoundary>
+        <ErrorBoundary label="Data">
+          <Data />
+        </ErrorBoundary>
+        <ErrorBoundary label="About">
+          <About />
+        </ErrorBoundary>
       </div>
     </div>
   );
