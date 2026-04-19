@@ -177,6 +177,7 @@ pub fn run() {
                 db,
                 capture: capture_state,
                 prev_foreground: Mutex::new(None),
+                tray_pause_item: Mutex::new(None),
             });
 
             // 6. 注册全局快捷键：Cmd+Shift+V (macOS) / Ctrl+Shift+V (其他) → toggle panel

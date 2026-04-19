@@ -16,6 +16,21 @@ pub struct AppState {
     pub capture: Arc<CaptureState>,
     /// 唤起快捷键触发时抓取的前景窗口句柄（供 paste_to_previous 还原焦点）
     pub prev_foreground: PrevForeground,
+    /// Tray 暂停菜单项 handle — 用于动态更新文字（暂停记录 ⇄ 继续记录）。
+    /// setup_tray 注入，pause/resume 后调 sync_tray_pause_text 同步显示。
+    pub tray_pause_item: std::sync::Mutex<Option<tauri::menu::MenuItem<tauri::Wry>>>,
+}
+
+impl AppState {
+    /// 根据当前暂停状态刷新 tray 菜单项文字
+    pub fn sync_tray_pause_text(&self) {
+        let paused = self.capture.is_paused();
+        if let Ok(guard) = self.tray_pause_item.lock() {
+            if let Some(item) = guard.as_ref() {
+                let _ = item.set_text(if paused { "继续记录" } else { "暂停记录" });
+            }
+        }
+    }
 }
 
 // ── 搜索 ──
@@ -206,6 +221,7 @@ pub fn do_pause_capture(state: &AppState, minutes: Option<u64>) {
     }
 
     tracing::info!("Capture paused for {:?} minutes", minutes);
+    state.sync_tray_pause_text();
 }
 
 /// resume_capture 的核心逻辑，供 Tauri command 和 tray menu handler 共享。
@@ -214,6 +230,7 @@ pub fn do_resume_capture(state: &AppState) {
     let conn = state.db.conn();
     let _ = repository::set_setting(&conn, settings_keys::CAPTURE_PAUSED_UNTIL, None);
     tracing::info!("Capture resumed");
+    state.sync_tray_pause_text();
 }
 
 #[tauri::command]

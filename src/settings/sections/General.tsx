@@ -3,9 +3,11 @@ import { enable, disable, isEnabled } from "@tauri-apps/plugin-autostart";
 import Section, { Row } from "../components/Section";
 import Switch from "../components/Switch";
 import { shortcutLabel } from "../../lib/platform";
+import { useToast } from "../../lib/toast";
 
 export default function General() {
   const [autostart, setAutostart] = useState<boolean | null>(null);
+  const toast = useToast();
 
   useEffect(() => {
     isEnabled()
@@ -20,8 +22,8 @@ export default function General() {
       else await disable();
     } catch (e) {
       console.error("toggle autostart failed", e);
-      // 回滚 UI
-      setAutostart(!v);
+      setAutostart(!v); // 回滚 UI
+      toast("error", `开机自启动${v ? "开启" : "关闭"}失败：${e}`);
     }
   };
 

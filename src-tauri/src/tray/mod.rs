@@ -38,14 +38,27 @@ mod ids {
 }
 
 pub fn setup_tray(app: &App) -> tauri::Result<()> {
-    let search = MenuItemBuilder::with_id(ids::SEARCH, "🔍 快速搜索 (Cmd/Ctrl+Shift+V)").build(app)?;
+    // 纯文字菜单项 — 去掉 emoji（Windows 11 菜单渲染 emoji 对不齐 + 彩色冲突单色风格）
+    // 快捷键提示写在 accelerator 位置（menu 自带右侧对齐，更规范）
+    let search = MenuItemBuilder::with_id(ids::SEARCH, "快速搜索")
+        .accelerator("CmdOrCtrl+Shift+V")
+        .build(app)?;
 
-    // 暂停简化为单一 toggle 项（点击根据当前状态切 pause/resume）
-    // 之前的 5m/1h/手动 三选项实际使用 95% 是手动恢复，时间预设属于过度设计
-    let toggle_pause = MenuItemBuilder::with_id(ids::TOGGLE_PAUSE, "⏸ 暂停 / ▶ 继续记录").build(app)?;
+    // 暂停菜单文字动态：setup 后根据 capture.is_paused() 初始化；pause/resume 后由
+    // AppState::sync_tray_pause_text 更新。"暂停记录" ⇄ "继续记录"
+    let toggle_pause = MenuItemBuilder::with_id(ids::TOGGLE_PAUSE, "暂停记录").build(app)?;
 
-    let settings = MenuItemBuilder::with_id(ids::SETTINGS, "⚙️ 设置").build(app)?;
-    let quit = MenuItemBuilder::with_id(ids::QUIT, "🚪 退出 Teamo").build(app)?;
+    let settings = MenuItemBuilder::with_id(ids::SETTINGS, "设置").build(app)?;
+    let quit = MenuItemBuilder::with_id(ids::QUIT, "退出 Teamo").build(app)?;
+
+    // 存 toggle_pause handle 到 AppState（已 manage）
+    if let Some(state) = app.try_state::<AppState>() {
+        if let Ok(mut guard) = state.tray_pause_item.lock() {
+            *guard = Some(toggle_pause.clone());
+        }
+        // 启动时若有 timed pause 被恢复（lib.rs 里的逻辑），这里同步菜单文字
+        state.sync_tray_pause_text();
+    }
 
     let menu = MenuBuilder::new(app)
         .item(&search)
