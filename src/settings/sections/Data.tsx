@@ -96,8 +96,17 @@ export default function Data() {
         <button
           onClick={openDir}
           disabled={!info}
-          className="text-[11px] px-2 py-1 bg-stone-100 hover:bg-stone-200 rounded disabled:opacity-40"
+          className="inline-flex items-center gap-1.5 text-[11px] px-2 py-1 bg-stone-100 hover:bg-stone-200 rounded disabled:opacity-40"
         >
+          <svg width="11" height="11" viewBox="0 0 12 12" fill="none" className="flex-shrink-0">
+            <path
+              d="M1.5 3.5C1.5 2.94772 1.94772 2.5 2.5 2.5H5L6 3.5H9.5C10.0523 3.5 10.5 3.94772 10.5 4.5V9C10.5 9.55228 10.0523 10 9.5 10H2.5C1.94772 10 1.5 9.55228 1.5 9V3.5Z"
+              stroke="currentColor"
+              strokeWidth="1.2"
+              fill="none"
+              strokeLinejoin="round"
+            />
+          </svg>
           在文件管理器打开
         </button>
       </Row>
@@ -111,8 +120,19 @@ export default function Data() {
       >
         <button
           onClick={() => void refresh()}
-          className="text-[11px] text-stone-500 hover:text-stone-700"
+          className="inline-flex items-center gap-1 text-[11px] px-2 py-1 bg-stone-100 hover:bg-stone-200 rounded text-stone-600"
+          title="重新计算存储占用"
         >
+          <svg width="11" height="11" viewBox="0 0 12 12" fill="none" className="flex-shrink-0">
+            <path
+              d="M10 3V5.5H7.5M2 9V6.5H4.5M10 5.5C9.5 3.5 7.8 2 6 2C4.5 2 3.2 2.8 2.5 4M2 6.5C2.5 8.5 4.2 10 6 10C7.5 10 8.8 9.2 9.5 8"
+              stroke="currentColor"
+              strokeWidth="1.2"
+              fill="none"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+          </svg>
           刷新
         </button>
       </Row>

@@ -3,7 +3,7 @@ import { open as openShell } from "@tauri-apps/plugin-shell";
 import Section, { Row } from "../components/Section";
 
 export default function About() {
-  const [version, setVersion] = useState<string>("loading...");
+  const [version, setVersion] = useState<string | null>(null);
 
   useEffect(() => {
     import("@tauri-apps/api/app")
@@ -22,7 +22,11 @@ export default function About() {
         <span className="text-[12px] text-stone-600">Teamo</span>
       </Row>
       <Row label="版本" hint="检查更新 Phase 2 支持">
-        <span className="text-[12px] text-stone-600">v{version} · pre-alpha</span>
+        {version === null ? (
+          <span className="inline-block w-20 h-3 bg-stone-100 rounded animate-pulse" />
+        ) : (
+          <span className="text-[12px] text-stone-600">v{version} · pre-alpha</span>
+        )}
       </Row>
       <Row label="开源协议">
         <button
