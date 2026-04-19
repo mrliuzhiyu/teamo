@@ -1,10 +1,18 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import type { ClipboardRow } from "./types";
 import type { SessionSummary } from "./useAggregated";
 import { formatPreview, formatRelativeTime } from "./utils";
 import { useAuth } from "../settings/useAuth";
 import { useToast } from "../lib/toast";
+
+interface UploadProgress {
+  session_id: string;
+  stage: "preparing" | "uploading_images" | "creating_memo";
+  current: number;
+  total: number;
+}
 
 interface Props {
   session: SessionSummary;
@@ -42,8 +50,39 @@ export default function SessionCard({
   const { state: authState } = useAuth();
   const toast = useToast();
   const [uploading, setUploading] = useState(false);
+  const [progress, setProgress] = useState<UploadProgress | null>(null);
   const [justUploaded, setJustUploaded] = useState(false);
   const isUploaded = !!session.uploaded_at || justUploaded;
+
+  // 订阅 upload:progress,只认 session_id 匹配的事件(多 session 并行上云时互不干扰)
+  useEffect(() => {
+    if (!uploading) return;
+    const unlistenPromise = listen<UploadProgress>("upload:progress", (e) => {
+      if (e.payload.session_id === session.session_id) {
+        setProgress(e.payload);
+      }
+    });
+    return () => {
+      void unlistenPromise.then((un) => un());
+    };
+  }, [uploading, session.session_id]);
+
+  // 根据 stage 生成按钮文字
+  const uploadingLabel = (() => {
+    if (!progress) return "⏳ 准备中";
+    switch (progress.stage) {
+      case "preparing":
+        return "⏳ 准备中";
+      case "uploading_images":
+        return progress.total > 0
+          ? `⏳ 上传图片 ${progress.current}/${progress.total}`
+          : "⏳ 上传图片";
+      case "creating_memo":
+        return "⏳ 整理 memo";
+      default:
+        return "⏳ 上云中";
+    }
+  })();
 
   const handleUpload = async (e: React.MouseEvent) => {
     e.stopPropagation(); // 防止点按钮时误触发展开
@@ -52,6 +91,7 @@ export default function SessionCard({
       return;
     }
     setUploading(true);
+    setProgress(null);
     try {
       const result = await invoke<UploadResult>("upload_session", {
         sessionId: session.session_id,
@@ -66,6 +106,7 @@ export default function SessionCard({
       toast("error", `上云失败：${err}`);
     } finally {
       setUploading(false);
+      setProgress(null);
     }
   };
 
@@ -135,7 +176,7 @@ export default function SessionCard({
                 : "将此 session 整理成 memo 上云"
           }
         >
-          {uploading ? "⏳ 上云中" : isUploaded ? "✓ 已上云" : "📤 上云"}
+          {uploading ? uploadingLabel : isUploaded ? "✓ 已上云" : "📤 上云"}
         </button>
       </div>
 

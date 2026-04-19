@@ -251,9 +251,27 @@ pub fn list_session_items(
 /// 上传 session 到 /api/memos/batch（一个 session 拼接成一条 memo）
 #[tauri::command]
 pub async fn upload_session(
+    app: tauri::AppHandle,
     state: State<'_, AppState>,
     session_id: String,
 ) -> Result<crate::cloud_sync::UploadSessionResult, String> {
+    use tauri::Emitter;
+
+    // progress 事件 helper:带 session_id 避免多 session 并行时窜流
+    let emit_progress = |stage: &str, current: usize, total: usize| {
+        let _ = app.emit(
+            "upload:progress",
+            serde_json::json!({
+                "session_id": session_id,
+                "stage": stage,
+                "current": current,
+                "total": total,
+            }),
+        );
+    };
+
+    emit_progress("preparing", 0, 0);
+
     // 1. Sync scope：查 items + 过滤（items 克隆到 owned 供 async 使用）
     let (owned_items, skipped, device_id, images_dir) = {
         let conn = state.db.conn();
@@ -273,6 +291,11 @@ pub async fn upload_session(
     };
 
     // 2. Async：按序上传每张图片拿 URL（失败的图跳过，文字仍上云）
+    let image_total = owned_items
+        .iter()
+        .filter(|i| i.content_type == "image")
+        .count();
+    let mut image_done = 0usize;
     let mut image_urls: std::collections::HashMap<String, String> =
         std::collections::HashMap::new();
     let mut image_failures = 0usize;
@@ -282,6 +305,7 @@ pub async fn upload_session(
         }
         let Some(filename) = item.image_path.as_deref() else { continue };
         let local_path = images_dir.join(filename);
+        emit_progress("uploading_images", image_done, image_total);
         match crate::cloud_sync::upload_image_to_cloud(&local_path).await {
             Ok(url) => {
                 image_urls.insert(item.id.clone(), url);
@@ -291,6 +315,8 @@ pub async fn upload_session(
                 image_failures += 1;
             }
         }
+        image_done += 1;
+        emit_progress("uploading_images", image_done, image_total);
     }
 
     // 3. 组装 memo payload（sync，不碰 DB）
@@ -298,6 +324,7 @@ pub async fn upload_session(
     let memo = crate::cloud_sync::build_session_memo(&session_id, &refs, &device_id, &image_urls);
     let payload = serde_json::json!({ "memos": [memo] });
 
+    emit_progress("creating_memo", 0, 0);
     // 4. Async 调 /api/memos/batch
     let resp = crate::auth::http::authed_post("/api/memos/batch", &payload).await?;
     let status = resp.status();
