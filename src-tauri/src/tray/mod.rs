@@ -15,7 +15,7 @@
 use crate::commands::{do_pause_capture, do_resume_capture, AppState};
 use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::{
-    menu::{MenuBuilder, MenuItemBuilder, SubmenuBuilder},
+    menu::{MenuBuilder, MenuItemBuilder},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     App, AppHandle, Manager,
 };
@@ -32,10 +32,7 @@ pub static IS_QUITTING: AtomicBool = AtomicBool::new(false);
 /// 菜单项 id — 在单一常量源定义避免字符串漂移
 mod ids {
     pub const SEARCH: &str = "search";
-    pub const PAUSE_5M: &str = "pause_5m";
-    pub const PAUSE_1H: &str = "pause_1h";
-    pub const PAUSE_MANUAL: &str = "pause_manual";
-    pub const RESUME: &str = "resume";
+    pub const TOGGLE_PAUSE: &str = "toggle_pause";
     pub const SETTINGS: &str = "settings";
     pub const QUIT: &str = "quit";
 }
@@ -43,24 +40,17 @@ mod ids {
 pub fn setup_tray(app: &App) -> tauri::Result<()> {
     let search = MenuItemBuilder::with_id(ids::SEARCH, "🔍 快速搜索 (Cmd/Ctrl+Shift+V)").build(app)?;
 
-    let pause_5m = MenuItemBuilder::with_id(ids::PAUSE_5M, "5 分钟").build(app)?;
-    let pause_1h = MenuItemBuilder::with_id(ids::PAUSE_1H, "1 小时").build(app)?;
-    let pause_manual = MenuItemBuilder::with_id(ids::PAUSE_MANUAL, "直到我恢复").build(app)?;
-    let pause_submenu = SubmenuBuilder::new(app, "⏸ 暂停记录")
-        .item(&pause_5m)
-        .item(&pause_1h)
-        .item(&pause_manual)
-        .build()?;
+    // 暂停简化为单一 toggle 项（点击根据当前状态切 pause/resume）
+    // 之前的 5m/1h/手动 三选项实际使用 95% 是手动恢复，时间预设属于过度设计
+    let toggle_pause = MenuItemBuilder::with_id(ids::TOGGLE_PAUSE, "⏸ 暂停 / ▶ 继续记录").build(app)?;
 
-    let resume = MenuItemBuilder::with_id(ids::RESUME, "▶ 继续记录").build(app)?;
     let settings = MenuItemBuilder::with_id(ids::SETTINGS, "⚙️ 设置").build(app)?;
     let quit = MenuItemBuilder::with_id(ids::QUIT, "🚪 退出 Teamo").build(app)?;
 
     let menu = MenuBuilder::new(app)
         .item(&search)
         .separator()
-        .item(&pause_submenu)
-        .item(&resume)
+        .item(&toggle_pause)
         .separator()
         .item(&settings)
         .separator()
@@ -103,10 +93,7 @@ fn handle_menu_event(app: &AppHandle, event: tauri::menu::MenuEvent) {
             // 否则从 tray 唤起的 panel 按 Enter 会粘到错误的窗口。
             show_panel_capturing_foreground(app);
         }
-        ids::PAUSE_5M => pause(app, Some(5)),
-        ids::PAUSE_1H => pause(app, Some(60)),
-        ids::PAUSE_MANUAL => pause(app, None),
-        ids::RESUME => resume(app),
+        ids::TOGGLE_PAUSE => toggle_pause(app),
         ids::SETTINGS => {
             if let Some(main) = app.get_webview_window("main") {
                 let _ = main.show();
@@ -145,18 +132,15 @@ fn show_panel_capturing_foreground(app: &AppHandle) {
     crate::window::panel::toggle_panel(app);
 }
 
-fn pause(app: &AppHandle, minutes: Option<u64>) {
+fn toggle_pause(app: &AppHandle) {
     if let Some(state) = app.try_state::<AppState>() {
-        do_pause_capture(&state, minutes);
+        if state.capture.is_paused() {
+            do_resume_capture(&state);
+        } else {
+            // None = 直到手动恢复；简化后没有时间预设
+            do_pause_capture(&state, None);
+        }
     } else {
-        tracing::warn!("tray pause: AppState not ready");
-    }
-}
-
-fn resume(app: &AppHandle) {
-    if let Some(state) = app.try_state::<AppState>() {
-        do_resume_capture(&state);
-    } else {
-        tracing::warn!("tray resume: AppState not ready");
+        tracing::warn!("tray toggle_pause: AppState not ready");
     }
 }

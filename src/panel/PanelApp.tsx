@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
@@ -9,9 +9,13 @@ import SearchBar from "./SearchBar";
 import CardList from "./CardList";
 import ActionBar from "./ActionBar";
 import UndoToast from "./UndoToast";
+import PanelSettings from "./PanelSettings";
 import { enterHintLabel } from "../lib/platform";
 
+type View = "list" | "settings";
+
 export default function PanelApp() {
+  const [view, setView] = useState<View>("list");
   const panel = usePanel();
   const searchRef = useRef<HTMLInputElement>(null);
 
@@ -84,6 +88,18 @@ export default function PanelApp() {
   );
 
   useEffect(() => {
+    // Settings 视图只处理 Esc 返回，不处理列表导航
+    if (view === "settings") {
+      const onKey = (e: KeyboardEvent) => {
+        if (e.key === "Escape") {
+          e.preventDefault();
+          setView("list");
+        }
+      };
+      window.addEventListener("keydown", onKey);
+      return () => window.removeEventListener("keydown", onKey);
+    }
+
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
         e.preventDefault();
@@ -120,7 +136,7 @@ export default function PanelApp() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [panel, handleEnter, hidePanel]);
+  }, [panel, handleEnter, hidePanel, view]);
 
   useEffect(() => {
     const win = getCurrentWebviewWindow();
@@ -136,9 +152,17 @@ export default function PanelApp() {
     };
   }, []);
 
+  if (view === "settings") {
+    return <PanelSettings onBack={() => setView("list")} />;
+  }
+
   return (
     <div className="h-screen flex flex-col bg-white select-none relative">
-      <StatsHeader stats={panel.stats} onClose={() => void hidePanel()} />
+      <StatsHeader
+        stats={panel.stats}
+        isPaused={panel.isPaused}
+        onClose={() => void hidePanel()}
+      />
       <SearchBar
         ref={searchRef}
         value={panel.query}
@@ -168,8 +192,11 @@ export default function PanelApp() {
       </div>
       <ActionBar
         isPaused={panel.isPaused}
-        onPause={(m) => void panel.pauseCapture(m)}
-        onResume={() => void panel.resumeCapture()}
+        onTogglePause={() => {
+          if (panel.isPaused) void panel.resumeCapture();
+          else void panel.pauseCapture(null);
+        }}
+        onOpenSettings={() => setView("settings")}
       />
       {panel.pendingForget && (
         <UndoToast
