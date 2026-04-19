@@ -36,7 +36,8 @@ export default function CardItem({
   const isImage = row.content_type === "image" && row.image_path;
   const isPinned = row.pinned_at !== null && row.pinned_at !== undefined;
   const badge = getStateBadge(row);
-  const preview = formatPreview(row);
+  // 搜索模式下传 query 给 formatPreview 触发命中片段摘要（长文命中在后半段不被 line-clamp 吃掉）
+  const preview = formatPreview(row, 80, query);
   const parts = row.sensitive_type ? [{ text: preview, hit: false }] : highlightMatches(preview, query);
 
   // 图片缩略图：一次 invoke 读 data URL，缓存在 state

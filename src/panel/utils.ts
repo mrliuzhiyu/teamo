@@ -24,7 +24,7 @@ export function formatRelativeTime(tsMs: number): string {
   return `${d.getFullYear()} 年 ${d.getMonth() + 1} 月 ${d.getDate()} 日`;
 }
 
-export function formatPreview(row: ClipboardRow, maxLen = 80): string {
+export function formatPreview(row: ClipboardRow, maxLen = 80, query?: string): string {
   if (row.sensitive_type) {
     // AC-4 原型："••••••• 从 1Password"（只显示来源，不显示 sensitive_type 冗余信息）
     return row.source_app
@@ -39,9 +39,30 @@ export function formatPreview(row: ClipboardRow, maxLen = 80): string {
   }
   const raw = row.content ?? "";
   const clean = raw.replace(/\s+/g, " ").trim();
-  // 用 Array.from 按 Unicode code point 切，避免在 emoji（surrogate pair）中间切出无效字符
+  // Unicode code point 切片，避免 emoji surrogate pair 中间截断
   const chars = Array.from(clean);
   if (chars.length <= maxLen) return clean;
+
+  // 搜索模式：命中词在截断范围外时，抽取命中前后 ~30 字的上下文窗口
+  // （对标 Ditto F3 预览外的"命中定位"需求；避免长文命中在后半段 line-clamp
+  //  只显示前 2 行导致 hit 看不见的 bug）
+  const q = query?.trim().toLowerCase();
+  if (q) {
+    const lower = clean.toLowerCase();
+    const hitIdx = lower.indexOf(q);
+    // 命中在 maxLen 边界外（或虽在内但距开头 > 40 更易看不清）时取窗口
+    if (hitIdx > 40 && hitIdx + q.length < chars.length) {
+      const hitChars = Array.from(clean.slice(0, hitIdx)).length;
+      const CONTEXT = 30;
+      const start = Math.max(0, hitChars - CONTEXT);
+      const hitEndChars = hitChars + Array.from(q).length;
+      const end = Math.min(chars.length, hitEndChars + CONTEXT);
+      const prefix = start > 0 ? "…" : "";
+      const suffix = end < chars.length ? "…" : "";
+      return prefix + chars.slice(start, end).join("") + suffix;
+    }
+  }
+
   return chars.slice(0, maxLen).join("") + "…";
 }
 
