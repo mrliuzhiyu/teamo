@@ -19,17 +19,19 @@
 use std::ffi::OsStr;
 use std::os::windows::ffi::OsStrExt;
 use std::ptr;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU32, Ordering};
 use std::sync::mpsc::Sender;
 use std::sync::OnceLock;
 use std::time::Duration;
 
 use winapi::shared::minwindef::{DWORD, LPARAM, LRESULT, UINT, WPARAM};
 use winapi::shared::windef::HWND;
+use winapi::um::processthreadsapi::GetCurrentThreadId;
 use winapi::um::winuser::{
-    AddClipboardFormatListener, CreateWindowExW, DefWindowProcW, DispatchMessageW,
-    GetClipboardSequenceNumber, GetMessageW, RegisterClassW, TranslateMessage, HWND_MESSAGE, MSG,
-    WM_CLIPBOARDUPDATE, WNDCLASSW,
+    AddClipboardFormatListener, CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW,
+    GetClipboardSequenceNumber, GetMessageW, PostThreadMessageW, RegisterClassW,
+    RemoveClipboardFormatListener, TranslateMessage, HWND_MESSAGE, MSG, WM_CLIPBOARDUPDATE,
+    WM_QUIT, WNDCLASSW,
 };
 
 /// 全局 sender：WndProc 回调是 `unsafe extern "system" fn`，无法携带上下文，
@@ -55,6 +57,16 @@ const HEALTH_CHECK_INTERVAL: Duration = Duration::from_secs(300);
 /// seq diff 超过此值判断链断（正常情况下消费事件应 ≤ seq 变化次数；
 /// 允许一点偏差是因为 IsClipboardFormatAvailable 等内部操作也会动 seq）
 const SEQ_BREAK_THRESHOLD: u32 = 10;
+
+/// 当前 message loop 线程 ID（用于 PostThreadMessageW 发 WM_QUIT 停旧 loop）
+static LISTENER_THREAD_ID: AtomicU32 = AtomicU32::new(0);
+
+/// 当前 message-only window 句柄 isize（HWND 持有跨线程需要）
+/// 重连时用于 RemoveClipboardFormatListener + DestroyWindow 清理
+static LISTENER_HWND: AtomicIsize = AtomicIsize::new(0);
+
+/// 防止并发重连（两个 health check 同时触发 reconnect 会双起 message loop）
+static RECONNECTING: AtomicBool = AtomicBool::new(false);
 
 /// WndProc —— 剪贴板变化时 Windows 回调这里
 unsafe extern "system" fn wnd_proc(
@@ -83,8 +95,8 @@ unsafe extern "system" fn wnd_proc(
 }
 
 /// 健康检查线程：每 5 分钟对比 OS seq 与 listener 看到的最后 seq。
-/// 如果 OS seq 显著领先 → listener 链可能被系统/安全软件摘除 → log warn。
-/// v0.2 简版只报警不重连；Phase 2 补真重连（DestroyWindow + CreateWindow + AddListener）。
+/// OS seq 显著领先 = listener 链被系统/安全软件摘除 → 自动重连恢复。
+/// Ditto 对应 `SetEnsureConnectedTimer` 机制（ClipboardViewer.cpp:107-110, 439-461）。
 fn start_health_check() {
     std::thread::Builder::new()
         .name("teamo-clipboard-health".to_string())
@@ -92,18 +104,55 @@ fn start_health_check() {
             std::thread::sleep(HEALTH_CHECK_INTERVAL);
             let current: DWORD = unsafe { GetClipboardSequenceNumber() };
             let last = LAST_SEEN_SEQ.load(Ordering::Relaxed);
-            // 只有 current > last 且差 > 阈值才 warn（wrap-around 罕见，u32 ~4B 次 clip 变化）
-            if (current as u32).saturating_sub(last) > SEQ_BREAK_THRESHOLD {
+            let diff = (current as u32).saturating_sub(last);
+            if diff > SEQ_BREAK_THRESHOLD {
                 tracing::warn!(
-                    "Clipboard listener may be disconnected: OS seq={}, last event seq={}, \
-                     diff={}. If this persists, restart Teamo (Phase 2: auto-reconnect).",
-                    current,
-                    last,
-                    (current as u32).saturating_sub(last),
+                    "Clipboard listener disconnected: OS seq={current}, last event seq={last}, \
+                     diff={diff}. Attempting auto-reconnect..."
                 );
+                reconnect_listener();
             }
         })
         .expect("failed to spawn clipboard health check thread");
+}
+
+/// 重建 message-only window + AddClipboardFormatListener。
+/// 流程：
+///   1. 抢 RECONNECTING flag（避免两个 health check 并发重连双起 message loop）
+///   2. 给旧 message loop thread 发 WM_QUIT → GetMessageW 返 0 → loop 退出 → 触发
+///      run_message_loop 底部的 cleanup（RemoveClipboardFormatListener + DestroyWindow）
+///   3. sleep 200ms 等旧 thread 退出 + 句柄释放（不 join 因 thread handle 不持有）
+///   4. spawn 新 message loop
+fn reconnect_listener() {
+    if RECONNECTING.swap(true, Ordering::AcqRel) {
+        tracing::debug!("reconnect_listener: another reconnect in progress, skipping");
+        return;
+    }
+
+    let old_tid = LISTENER_THREAD_ID.load(Ordering::Relaxed);
+    if old_tid != 0 {
+        unsafe {
+            // PostThreadMessageW 发 WM_QUIT 到指定线程的 message queue → GetMessageW 返 0 退出 loop
+            PostThreadMessageW(old_tid, WM_QUIT, 0, 0);
+        }
+        // 让旧 thread 跑完 cleanup（RemoveListener + DestroyWindow）
+        std::thread::sleep(Duration::from_millis(200));
+    }
+
+    // 启动新 message loop（复用 run_message_loop，内部重新 RegisterClass + CreateWindow + AddListener）
+    std::thread::Builder::new()
+        .name("teamo-clipboard-listener".to_string())
+        .spawn(|| unsafe {
+            run_message_loop();
+        })
+        .ok();
+
+    // 同步 seq baseline，避免新 listener 启动后 health check 立即又判断断链
+    let initial_seq: DWORD = unsafe { GetClipboardSequenceNumber() };
+    LAST_SEEN_SEQ.store(initial_seq as u32, Ordering::Relaxed);
+
+    RECONNECTING.store(false, Ordering::Release);
+    tracing::info!("Clipboard listener reconnected");
 }
 
 /// 启动 Windows 剪贴板监听器线程。
@@ -129,7 +178,11 @@ pub fn start(tx: Sender<()>) {
 }
 
 /// 消息循环主体。panic / 初始化失败时记 log 后线程退出（整个捕获子系统 offline）。
+/// 退出前做 cleanup：RemoveClipboardFormatListener + DestroyWindow（重连时必须干净）
 unsafe fn run_message_loop() {
+    // 记录本线程 ID，供 reconnect_listener 用 PostThreadMessageW 停止
+    LISTENER_THREAD_ID.store(GetCurrentThreadId(), Ordering::Relaxed);
+
     let class_name: Vec<u16> = OsStr::new("TeamoClipboardListener")
         .encode_wide()
         .chain(std::iter::once(0))
@@ -140,7 +193,7 @@ unsafe fn run_message_loop() {
         lpszClassName: class_name.as_ptr(),
         ..std::mem::zeroed()
     };
-    // RegisterClassW 若 class 名重复会返回 0，但这是单例场景 OK
+    // RegisterClassW 首次调用成功；后续重连调用返 0（class 已注册），但不影响后续 CreateWindow
     RegisterClassW(&wc);
 
     // message-only window：不显示、不进 z-order、不占 taskbar
@@ -162,6 +215,7 @@ unsafe fn run_message_loop() {
 
     if hwnd.is_null() {
         tracing::error!("Failed to create message-only window for clipboard listener");
+        LISTENER_THREAD_ID.store(0, Ordering::Relaxed);
         return;
     }
 
@@ -169,17 +223,26 @@ unsafe fn run_message_loop() {
         tracing::error!(
             "AddClipboardFormatListener failed — clipboard events won't be delivered"
         );
+        DestroyWindow(hwnd);
+        LISTENER_THREAD_ID.store(0, Ordering::Relaxed);
         return;
     }
 
+    LISTENER_HWND.store(hwnd as isize, Ordering::Relaxed);
     tracing::info!("Windows clipboard event listener started (event-driven capture)");
 
-    // 消息循环
+    // 消息循环。PostThreadMessageW(WM_QUIT) 会让 GetMessageW 返回 0 退出
     let mut msg: MSG = std::mem::zeroed();
     while GetMessageW(&mut msg, ptr::null_mut(), 0, 0) > 0 {
         TranslateMessage(&msg);
         DispatchMessageW(&msg);
     }
 
-    tracing::info!("Windows clipboard listener message loop exited");
+    // Cleanup：在线程退出前解绑 listener + 销毁 window，避免资源泄漏 + 防止 reconnect 时
+    // 新旧 hwnd 双收 WM_CLIPBOARDUPDATE 产生 double capture
+    RemoveClipboardFormatListener(hwnd);
+    DestroyWindow(hwnd);
+    LISTENER_HWND.store(0, Ordering::Relaxed);
+    LISTENER_THREAD_ID.store(0, Ordering::Relaxed);
+    tracing::info!("Windows clipboard listener message loop exited + cleaned up");
 }
