@@ -204,13 +204,11 @@ fn ingest_once(
     // 读文本（非空才处理；空文本可能是"截图附带空 CF_UNICODETEXT" 的情况，需 fall-through 到图片分支）
     if let Ok(text) = clipboard.get_text() {
         if !text.is_empty() {
-            let text_hash = format!("{:x}", {
-                use std::collections::hash_map::DefaultHasher;
-                use std::hash::{Hash, Hasher};
-                let mut h = DefaultHasher::new();
-                text.hash(&mut h);
-                h.finish()
-            });
+            // 用 SHA256 和图片分支对称，避免 DefaultHasher 的两个问题：
+            // 1) 种子随机，跨进程重启 hash 值变（虽然 last_hash 是 in-memory 不跨进程，
+            //    但统一哈希算法减少心智负担）
+            // 2) SipHash 不是密码学 hash，极低概率碰撞；SHA256 碰撞实际不可能
+            let text_hash = repository::sha256_hex(text.as_bytes());
 
             if last_hash.as_deref() == Some(&text_hash) {
                 return; // 没变化
@@ -260,6 +258,20 @@ fn ingest_once(
     if let Ok(image) = clipboard.get_image() {
         let pixels = image.bytes.as_ref();
         if pixels.is_empty() {
+            return;
+        }
+
+        // 大图阈值保护：避免超大截图（多屏 8K、PhotoShop 导出原图等边界）
+        // 阻塞消费线程 100+ ms 做 SHA256 + PNG 编码，甚至触发 OOM。
+        // 50 MB RGBA 约 3.6K×3.6K，实际 99.9% 截图远低于此。超限时 log warn 跳过，
+        // 用户可以手动保存到文件再复制文件路径（走 content_type=file 分支未实现，留 Phase 2）
+        const MAX_IMAGE_BYTES: usize = 50 * 1024 * 1024;
+        if pixels.len() > MAX_IMAGE_BYTES {
+            tracing::warn!(
+                "Image too large ({} MB > {} MB limit) — skipping to avoid blocking / OOM",
+                pixels.len() / (1024 * 1024),
+                MAX_IMAGE_BYTES / (1024 * 1024),
+            );
             return;
         }
 
