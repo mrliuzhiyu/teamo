@@ -204,6 +204,20 @@ fn ingest_once(
     // 读文本（非空才处理；空文本可能是"截图附带空 CF_UNICODETEXT" 的情况，需 fall-through 到图片分支）
     if let Ok(text) = clipboard.get_text() {
         if !text.is_empty() {
+            // 大文本阈值保护（对称大图 50MB 阈值）：
+            // 用户复制整本小说 / 超长代码文件时，5MB+ 文本会让 FTS5 索引膨胀 + SHA256
+            // 计算 50-200ms 阻塞消费线程。实际场景 99% 剪贴板文本 < 100KB，5MB 保守够用。
+            // 超限 log + 跳过；剪贴板内容仍可用（用户下一次 copy 正常内容即恢复记录）
+            const MAX_TEXT_BYTES: usize = 5 * 1024 * 1024;
+            if text.len() > MAX_TEXT_BYTES {
+                tracing::warn!(
+                    "Text too large ({} KB > {} KB limit) — skipping to avoid FTS5 bloat + hash stall",
+                    text.len() / 1024,
+                    MAX_TEXT_BYTES / 1024,
+                );
+                return;
+            }
+
             // 用 SHA256 和图片分支对称，避免 DefaultHasher 的两个问题：
             // 1) 种子随机，跨进程重启 hash 值变（虽然 last_hash 是 in-memory 不跨进程，
             //    但统一哈希算法减少心智负担）
