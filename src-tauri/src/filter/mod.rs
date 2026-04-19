@@ -135,17 +135,17 @@ pub fn check_app_rules(conn: &Connection, source_app: Option<&str>) -> Option<Fi
 
     // 哨兵：elevated 进程 source_app=None 会让整块 app_rules 跳过，
     // 用户加的 "KeePass.exe 黑名单" 对 KeePass-as-admin 失效（outside voice Issue 1）。
-    // 保守策略：如果用户**配置过任何** blacklist 规则（表达了 app-level 过滤意愿），
-    // 未知来源视同黑名单；否则不打扰（不让哨兵对"从没设规则"的用户误伤）。
+    //
+    // 保守策略：用户**配置过任何 app_rule**（不论 blacklist 还是 whitelist）即
+    // 表达了 app-level 过滤意愿 —— 白名单模式下"只信任白名单 App"隐含"未在白名单
+    // 就不记"，elevated 进程自然不在白名单里，也应视同拒绝。
+    // 旧版本只查 blacklist 计数 → 纯白名单用户（有 whitelist 无 blacklist）elevated
+    // 进程照样进入后续 sensitive/URL 检测流程，不符合 whitelist 语义。
     if app == crate::window::platform::ELEVATED_APP_SENTINEL {
-        let has_blacklist: i64 = conn
-            .query_row(
-                "SELECT COUNT(*) FROM app_rules WHERE rule_type = 'blacklist'",
-                [],
-                |row| row.get(0),
-            )
+        let has_any_rule: i64 = conn
+            .query_row("SELECT COUNT(*) FROM app_rules", [], |row| row.get(0))
             .unwrap_or(0);
-        if has_blacklist > 0 {
+        if has_any_rule > 0 {
             return Some(FilterDecision::blocked_app(app));
         }
         return None;

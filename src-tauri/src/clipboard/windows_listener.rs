@@ -21,7 +21,7 @@ use std::os::windows::ffi::OsStrExt;
 use std::ptr;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::mpsc::Sender;
-use std::sync::{Mutex, OnceLock};
+use std::sync::OnceLock;
 use std::time::Duration;
 
 use winapi::shared::minwindef::{DWORD, LPARAM, LRESULT, UINT, WPARAM};
@@ -33,8 +33,14 @@ use winapi::um::winuser::{
 };
 
 /// 全局 sender：WndProc 回调是 `unsafe extern "system" fn`，无法携带上下文，
-/// 只能从静态拿。初始化时被 `start_windows_listener` 赋值一次，之后只读。
-static EVENT_SENDER: OnceLock<Mutex<Option<Sender<()>>>> = OnceLock::new();
+/// 只能从静态拿。
+///
+/// 为什么不用 `Mutex<Option<Sender>>`：旧版本三层套娃 + 每次事件 lock()。
+/// Mutex poisoning（虽概率低）会让 `mu.lock()` 返 PoisonError，`if let Ok(guard)`
+/// silent drop 所有后续事件 —— listener 静默失聪。
+/// `Sender` 本身 `send(&self, _)` 无需可变访问；启动时注入后从不改 → 直接
+/// `OnceLock<Sender>` 无 Mutex 无 poisoning 风险，wnd_proc 路径也少一次 lock。
+static EVENT_SENDER: OnceLock<Sender<()>> = OnceLock::new();
 
 /// 上次 WndProc 收到 WM_CLIPBOARDUPDATE 时的剪贴板 sequence number。
 /// 两用途：
@@ -67,13 +73,9 @@ unsafe extern "system" fn wnd_proc(
             return 0;
         }
 
-        if let Some(mu) = EVENT_SENDER.get() {
-            if let Ok(guard) = mu.lock() {
-                if let Some(tx) = guard.as_ref() {
-                    // send 失败 = 接收端已 drop = 应用正在退出，忽略即可
-                    let _ = tx.send(());
-                }
-            }
+        if let Some(tx) = EVENT_SENDER.get() {
+            // send 失败 = 接收端已 drop = 应用正在退出，忽略即可
+            let _ = tx.send(());
         }
         return 0;
     }
@@ -107,11 +109,8 @@ fn start_health_check() {
 /// 启动 Windows 剪贴板监听器线程。
 /// 调用一次即可；线程跟 message loop 一起跑到进程退出。
 pub fn start(tx: Sender<()>) {
-    // 注入 sender 到全局静态
-    let mu = EVENT_SENDER.get_or_init(|| Mutex::new(None));
-    if let Ok(mut guard) = mu.lock() {
-        *guard = Some(tx);
-    }
+    // 注入 sender 到全局静态。重复调用时 set 会返 Err，忽略（幂等启动）
+    let _ = EVENT_SENDER.set(tx);
 
     // 初始化 seq baseline：不初始化的话首次 health check 会误判（OS seq 自开机以来
     // 累计了很多 clip 变化，但 LAST_SEEN_SEQ=0，差值会是亿级）
