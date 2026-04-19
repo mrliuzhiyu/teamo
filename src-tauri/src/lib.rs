@@ -6,6 +6,7 @@
 // 3. 启动剪切板捕获循环
 // 4. 注册 Tauri 插件 + commands
 
+mod auth;
 mod clipboard;
 mod commands;
 mod export;
@@ -86,6 +87,10 @@ pub fn run() {
             commands::import_data,
             commands::list_sessions,
             commands::list_session_items,
+            commands::auth_send_otp,
+            commands::auth_verify_otp,
+            commands::auth_logout,
+            commands::auth_state,
             commands::get_data_info,
             commands::clear_all_data,
             commands::list_app_rules,

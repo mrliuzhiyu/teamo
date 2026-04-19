@@ -246,6 +246,53 @@ pub fn list_session_items(
     repository::list_session_items(&conn, &session_id).map_err(|e| e.to_string())
 }
 
+// ── TextView 云端认证（R3.1）──
+// 关键：async 命令不持 Connection 跨 await（Connection 不 Send）。
+// 架构：HTTP 请求 async → 拿结果 → 短 scope 内同步写 DB + keyring
+
+#[tauri::command]
+pub async fn auth_send_otp(email: String) -> Result<(), String> {
+    crate::auth::send_otp_http(&email).await
+}
+
+#[tauri::command]
+pub async fn auth_verify_otp(
+    state: State<'_, AppState>,
+    email: String,
+    code: String,
+) -> Result<crate::auth::AuthUser, String> {
+    // 1. 纯网络请求（async，不碰 DB）
+    let resp = crate::auth::verify_otp_http(&email, &code).await?;
+
+    // 2. 持久化（sync scope，conn 不跨 await）
+    let user = resp.user.clone();
+    crate::auth::save_refresh_token(&resp.refresh_token)?;
+    crate::auth::set_access_token(resp.access_token);
+    {
+        let conn = state.db.conn();
+        crate::auth::save_user_sync(&conn, &user).map_err(|e| format!("save user: {e}"))?;
+    }
+    Ok(user)
+}
+
+#[tauri::command]
+pub async fn auth_logout(state: State<'_, AppState>) -> Result<(), String> {
+    // 纯 sync 操作，不涉及 await
+    crate::auth::delete_refresh_token().ok();
+    crate::auth::clear_access_token();
+    {
+        let conn = state.db.conn();
+        crate::auth::clear_user_sync(&conn).map_err(|e| format!("clear user: {e}"))?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub fn auth_state(state: State<'_, AppState>) -> crate::auth::AuthState {
+    let conn = state.db.conn();
+    crate::auth::current_auth_state(&conn)
+}
+
 // ── 数据导入（从 Teamo 自己的 JSON 导出恢复）──
 
 #[tauri::command]
