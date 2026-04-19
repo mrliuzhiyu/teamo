@@ -1,15 +1,29 @@
-// clipboard/ · 剪切板监听与读取
+// clipboard/ · 剪切板监听与读取（事件驱动）
 //
-// 职责：
-// 1. 事件式监听剪切板变化（clipboard-master）
-// 2. 读取内容（arboard）
-// 3. 分类型处理（text / image / file / html）
-// 4. 交给 storage 层持久化
+// v0.2 重构：500ms 轮询 → 事件驱动（对标 Ditto / CopyQ / Maccy）
+//
+// 架构：
+//   Windows：AddClipboardFormatListener → WM_CLIPBOARDUPDATE → mpsc::send(())
+//   macOS：   Phase 4 改 NSPasteboard KVO（暂不支持，compile-gated）
+//
+//   消费线程从 channel 接 () → ingest_once（读 text/image → 闸门 → 去重 → DB）
+//
+// 收益：CPU idle 时真 idle；响应 <10ms；快速连续复制不再被 500ms 窗口漏记
 
 use crate::storage::{self, repository};
+use std::panic::AssertUnwindSafe;
 use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
+use std::sync::mpsc;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+
+#[cfg(target_os = "windows")]
+mod windows_listener;
+
+#[cfg(not(target_os = "windows"))]
+compile_error!(
+    "Teamo v0.2 只支持 Windows（事件驱动剪贴板监听）。macOS Phase 4 用 NSPasteboard KVO 补齐。"
+);
 
 /// 剪切板捕获器状态
 pub struct CaptureState {
@@ -17,9 +31,8 @@ pub struct CaptureState {
     pub paused: AtomicBool,
     /// 暂停到期时间（None = 未暂停 / 手动暂停需手动恢复）
     pub paused_until: std::sync::Mutex<Option<Instant>>,
-    /// 心跳：capture loop 每次迭代前写入当前 Unix ms 时间戳。
-    /// Tray/health command 可读此值判断"capture 是否死了"（> 10s 无心跳 → dead）。
-    /// 初始 0 = 还没启动第一圈。
+    /// 最后一次处理 ingest 事件的时间戳（Unix ms）。
+    /// 事件驱动下 idle 是常态，此字段仅用于"最后活动时间"展示，不是 liveness 判据
     pub last_heartbeat_ms: AtomicI64,
 }
 
@@ -64,226 +77,235 @@ impl CaptureState {
     }
 }
 
-/// 在后台线程启动剪切板监听循环
+/// 启动事件驱动的剪切板捕获子系统。
 ///
-/// 使用 tauri-plugin-clipboard-manager 的 API 通过定时轮询检测变化。
-/// clipboard-master crate 在 Windows/macOS 都有平台原生 listener，但
-/// 与 Tauri 2.x 集成有 threading 问题，所以 v0.1 用轻量轮询（500ms 间隔）。
+/// 创建 2 个线程：
+/// 1. Listener thread（`windows_listener::start`）：跑 Windows message loop，
+///    收到 WM_CLIPBOARDUPDATE 后 `tx.send(())` 通知消费端
+/// 2. Consumer thread：阻塞 `rx.recv()` 等事件，收到后 `ingest_once` 处理
 ///
-/// **Supervisor 结构**：外层 `catch_unwind` 包裹内层真正的 capture loop。
-/// 任何 panic（arboard OOM / rusqlite Mutex poison / image decode assert 等）
-/// 都被捕获后 sleep 1s 重启内层，避免 capture 线程静默死亡而用户不知道
-/// "剪切板已经好几天没记录"。`CaptureState::last_heartbeat_ms` 每次迭代
-/// 写入时间戳，未来 Tray UI 可用它显示 "Capture: Running / Dead" 状态。
-pub fn start_capture_loop(
+/// 为什么分两个线程而不是直接在 message loop 里做 ingest：
+/// - message loop 必须保持 responsive，ingest 里有 DB 写入、图片 PNG 编码、
+///   filter 正则匹配（重度操作）。堵住 message loop 会让 Windows 误判窗口死亡
+/// - mpsc 天然限流：并发事件排队处理，不会同时跑多份 ingest
+///
+/// 消费线程有 panic 自愈包装：panic 后 sleep 1s 重新 init arboard 继续 recv。
+/// Listener thread 若失败（CreateWindow / AddListener）log 后退出，整个捕获子系统 offline。
+pub fn start_capture(db: Arc<storage::AppDatabase>, capture_state: Arc<CaptureState>) {
+    let (tx, rx) = mpsc::channel::<()>();
+
+    // 启动 Windows 监听线程
+    windows_listener::start(tx.clone());
+
+    // 启动时主动触发一次 ingest —— 否则 app 启动前已 copy 的内容会被漏掉
+    // （AddClipboardFormatListener 只对后续变化触发）
+    let _ = tx.send(());
+    // tx 在此 drop 也无妨：windows_listener 已把 clone 的 tx 存进全局静态
+
+    // 消费线程：从 channel 接事件 → ingest
+    std::thread::Builder::new()
+        .name("teamo-clipboard-consumer".to_string())
+        .spawn(move || {
+            consume_loop(db, capture_state, rx);
+        })
+        .expect("failed to spawn clipboard consumer thread");
+}
+
+/// 消费线程主体 + panic 自愈外层
+fn consume_loop(
     db: Arc<storage::AppDatabase>,
     capture_state: Arc<CaptureState>,
-) -> std::thread::JoinHandle<()> {
-    std::thread::spawn(move || loop {
+    rx: mpsc::Receiver<()>,
+) {
+    tracing::info!("Clipboard consumer thread started");
+
+    // 单次消费循环 — panic 后整段重启（重新 init arboard）
+    loop {
         let db_inner = Arc::clone(&db);
         let state_inner = Arc::clone(&capture_state);
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
-            capture_loop_inner(db_inner, state_inner);
+        let result = std::panic::catch_unwind(AssertUnwindSafe(|| {
+            run_consumer(&db_inner, &state_inner, &rx);
         }));
         match result {
             Ok(()) => {
-                tracing::info!("Clipboard capture loop exited normally");
+                tracing::info!("Clipboard consumer exited normally (channel closed)");
                 return;
             }
             Err(panic_info) => {
-                tracing::error!(
-                    "Clipboard capture loop panicked: {panic_info:?} — restarting in 1s"
-                );
+                tracing::error!("Clipboard consumer panicked: {panic_info:?} — restarting in 1s");
                 std::thread::sleep(Duration::from_secs(1));
             }
         }
-    })
+    }
 }
 
-fn capture_loop_inner(
-    db: Arc<storage::AppDatabase>,
-    capture_state: Arc<CaptureState>,
+fn run_consumer(
+    db: &Arc<storage::AppDatabase>,
+    capture_state: &Arc<CaptureState>,
+    rx: &mpsc::Receiver<()>,
 ) {
-    tracing::info!("Clipboard capture loop started");
-
-    let mut last_text_hash: Option<String> = None;
+    let mut last_hash: Option<String> = None;
     let mut clipboard = match arboard::Clipboard::new() {
         Ok(c) => c,
         Err(e) => {
-            tracing::error!("Failed to initialize clipboard: {e}");
+            tracing::error!("Failed to initialize arboard clipboard: {e}");
             return;
         }
     };
 
-    loop {
-        std::thread::sleep(Duration::from_millis(500));
-
-        // 心跳：每次迭代前记录时间戳，供 health check 判断线程是否活
+    while rx.recv().is_ok() {
+        // 记录"最后活动时间"（不是 liveness，仅展示用）
         let now_ms = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_millis() as i64)
             .unwrap_or(0);
-        capture_state
-            .last_heartbeat_ms
-            .store(now_ms, Ordering::Relaxed);
+        capture_state.last_heartbeat_ms.store(now_ms, Ordering::Relaxed);
 
-            // 检查暂停。is_paused() 内部若检测到定时暂停过期会自动 resume 内存态，
-            // 这里在 resume 发生时同步把 DB 里的 capture.paused_until 也清掉，
-            // 避免"内存是未暂停 / DB 还记着过期时间"两源不一致。
-            let was_paused = capture_state
-                .paused
-                .load(std::sync::atomic::Ordering::Relaxed);
-            if capture_state.is_paused() {
-                continue;
+        // 暂停检查（is_paused 内部会自动 resume 过期的定时暂停）
+        let was_paused = capture_state.paused.load(Ordering::Relaxed);
+        if capture_state.is_paused() {
+            continue;
+        }
+        if was_paused {
+            // 刚刚从"暂停过期"自动恢复 → 清 DB 里的 CAPTURE_PAUSED_UNTIL
+            let conn = db.conn();
+            let _ = repository::set_setting(
+                &conn,
+                crate::settings_keys::CAPTURE_PAUSED_UNTIL,
+                None,
+            );
+        }
+
+        ingest_once(db, &mut clipboard, &mut last_hash);
+    }
+}
+
+/// 单次 ingest：读 text / image → 闸门过滤 → 去重 → 写 DB
+///
+/// 对应原 capture_loop_inner 的单圈 body（不含 sleep）。
+/// `last_hash` 跨调用保留避免重复 ingest 同一内容（比如监听器偶尔重复 fire）。
+fn ingest_once(
+    db: &Arc<storage::AppDatabase>,
+    clipboard: &mut arboard::Clipboard,
+    last_hash: &mut Option<String>,
+) {
+    // 读文本
+    if let Ok(text) = clipboard.get_text() {
+        if text.is_empty() {
+            return;
+        }
+        let text_hash = format!("{:x}", {
+            use std::collections::hash_map::DefaultHasher;
+            use std::hash::{Hash, Hasher};
+            let mut h = DefaultHasher::new();
+            text.hash(&mut h);
+            h.finish()
+        });
+
+        if last_hash.as_deref() == Some(&text_hash) {
+            return; // 没变化
+        }
+        *last_hash = Some(text_hash);
+
+        // 抓当前前景 App（Windows 实现；macOS/Linux Phase 4）
+        let source_app = crate::window::platform::capture_foreground_app_name();
+
+        // 闸门：App 黑白名单 + 敏感数据 → state=local_only，其余 captured
+        let decision = {
+            let conn = db.conn();
+            crate::filter::apply_filters(&conn, &text, source_app.as_deref())
+        };
+        let id = generate_id();
+        let req = repository::InsertRequest {
+            id,
+            content: Some(text),
+            content_type: "text".to_string(),
+            image_path: None,
+            file_path: None,
+            source_app: source_app.clone(),
+            state: Some(decision.state),
+            blocked_reason: decision.blocked_reason,
+            sensitive_type: decision.sensitive_type,
+            matched_domain_rule: decision.matched_domain_rule,
+        };
+
+        let conn = db.conn();
+        match repository::insert_clipboard(&conn, req) {
+            Ok(repository::InsertResult::Inserted) => {
+                tracing::debug!("Captured new text clipboard entry");
             }
-            if was_paused {
-                // 刚刚从"暂停过期"自动恢复过来 → 清 DB
-                let conn = db.conn();
-                let _ = repository::set_setting(
-                    &conn,
-                    crate::settings_keys::CAPTURE_PAUSED_UNTIL,
-                    None,
-                );
+            Ok(repository::InsertResult::Deduplicated { existing_id }) => {
+                tracing::debug!("Deduplicated with {existing_id}");
             }
-
-            // 读文本
-            if let Ok(text) = clipboard.get_text() {
-                if text.is_empty() {
-                    continue;
-                }
-                let text_hash = format!("{:x}", {
-                    use std::collections::hash_map::DefaultHasher;
-                    use std::hash::{Hash, Hasher};
-                    let mut h = DefaultHasher::new();
-                    text.hash(&mut h);
-                    h.finish()
-                });
-
-                if last_text_hash.as_deref() == Some(&text_hash) {
-                    continue; // 没变化
-                }
-                last_text_hash = Some(text_hash);
-
-                // 抓当前前景 App（Windows 实现；macOS/Linux Phase 4）
-                // 必须在 filter + insert 前抓，因为 arboard get_text 本身可能唤起其他窗口
-                // （实际不会，但流程上抓在最早）
-                let source_app = crate::window::platform::capture_foreground_app_name();
-
-                // 闸门：App 黑白名单 + 敏感数据 → state=local_only，其余 captured
-                let decision = {
-                    let conn = db.conn();
-                    crate::filter::apply_filters(&conn, &text, source_app.as_deref())
-                };
-                let id = generate_id();
-                let req = repository::InsertRequest {
-                    id,
-                    content: Some(text),
-                    content_type: "text".to_string(),
-                    image_path: None,
-                    file_path: None,
-                    source_app: source_app.clone(),
-                    state: Some(decision.state),
-                    blocked_reason: decision.blocked_reason,
-                    sensitive_type: decision.sensitive_type,
-                    matched_domain_rule: decision.matched_domain_rule,
-                };
-
-                let conn = db.conn();
-                match repository::insert_clipboard(&conn, req) {
-                    Ok(repository::InsertResult::Inserted) => {
-                        tracing::debug!("Captured new text clipboard entry");
-                    }
-                    Ok(repository::InsertResult::Deduplicated { existing_id }) => {
-                        tracing::debug!("Deduplicated with {existing_id}");
-                    }
-                    Err(e) => {
-                        tracing::error!("Failed to insert clipboard: {e}");
-                    }
-                }
-            }
-
-            // 读图片
-            if let Ok(image) = clipboard.get_image() {
-                let pixels = image.bytes.as_ref();
-                if pixels.is_empty() {
-                    continue;
-                }
-
-                // 内存变化检测 hash —— 必须用全量 pixel 指纹防误判。
-                //
-                // 历史 bug：早期用首 4096 字节 DefaultHasher（outside voice review 发现）。
-                // 2560×1440 RGBA 截图约 14 MB，两张"顶栏都白 + 不同主体"的截图前 4KB
-                // 常常 bit-identical → 第二张被整个 continue 跳过，PNG 不写、DB 不插，
-                // 截图静默丢失。下游 repository::insert_clipboard 里的 `canonicalize + sha256`
-                // 是对 content 文本做的，救不了图片（图片的 content 是我们构造的 fingerprint 而非 pixel）。
-                //
-                // 修复：这里直接用全量 sha256。Rust sha256_hex 在现代机器上对 14MB
-                // 约 30-50ms，capture loop 500ms 轮询完全可吸收。与下面的 pixel_fingerprint
-                // 是同一个值（复用），也省一次重复 hash 运算。
-                let img_hash = repository::sha256_hex(pixels);
-
-                // 图片去重靠 hash 比较（和文本共用 last_text_hash 足够，因为同一时刻剪切板只有一种类型）
-                if last_text_hash.as_deref() == Some(&img_hash) {
-                    continue;
-                }
-                last_text_hash = Some(img_hash.clone());
-
-                // 保存图片到文件（真 PNG 编码，自带宽高，Phase 3C 粘贴时可还原）
-                let id = generate_id();
-                let filename = format!("{}.png", &id);
-                let img_path = db.images_dir().join(&filename);
-
-                if let Err(e) = image::save_buffer_with_format(
-                    &img_path,
-                    pixels,
-                    image.width as u32,
-                    image.height as u32,
-                    image::ExtendedColorType::Rgba8,
-                    image::ImageFormat::Png,
-                ) {
-                    tracing::error!("Failed to encode image as PNG: {e}");
-                    continue;
-                }
-
-                // image 的 dedup 指纹：复用上方 img_hash（同为全量 pixel SHA256），
-                // 避免对 14MB 截图算 2 次 hash（大图下 30-50ms × 2 = 60-100ms 纯浪费）。
-                // 解决 bug：之前 content=None → canonicalize("") → sha256("")，所有图片共享同一 hash 误判重复
-                let pixel_fingerprint = img_hash.clone();
-
-                // 图片不扫内容；但 App 黑白名单对图片也生效（比如 1Password 截屏 → 拦）。
-                // 走 filter::check_app_rules 共用函数，保持和文本分支对称。
-                let source_app = crate::window::platform::capture_foreground_app_name();
-                let (state, blocked_reason) = {
-                    let conn = db.conn();
-                    match crate::filter::check_app_rules(&conn, source_app.as_deref()) {
-                        Some(decision) if decision.state == "local_only" => {
-                            (Some(decision.state), decision.blocked_reason)
-                        }
-                        // 白名单（captured）或无命中：都走默认，不写 state/blocked_reason
-                        _ => (None, None),
-                    }
-                };
-
-                let req = repository::InsertRequest {
-                    id,
-                    content: Some(pixel_fingerprint),
-                    content_type: "image".to_string(),
-                    image_path: Some(filename),
-                    file_path: None,
-                    source_app,
-                    state,
-                    blocked_reason,
-                    sensitive_type: None,
-                    matched_domain_rule: None, // 图片无 URL，此字段永远 None
-                };
-
-                let conn = db.conn();
-                match repository::insert_clipboard(&conn, req) {
-                    Ok(_) => tracing::debug!("Captured image clipboard entry"),
-                    Err(e) => tracing::error!("Failed to insert image clipboard: {e}"),
-                }
+            Err(e) => {
+                tracing::error!("Failed to insert clipboard: {e}");
             }
         }
+        return;
+    }
+
+    // 读图片
+    if let Ok(image) = clipboard.get_image() {
+        let pixels = image.bytes.as_ref();
+        if pixels.is_empty() {
+            return;
+        }
+
+        // 全量 pixel sha256 做 dedup 指纹（见原注释：首 4KB hash 会误判截图静默丢失）
+        let img_hash = repository::sha256_hex(pixels);
+
+        if last_hash.as_deref() == Some(&img_hash) {
+            return;
+        }
+        *last_hash = Some(img_hash.clone());
+
+        let id = generate_id();
+        let filename = format!("{}.png", &id);
+        let img_path = db.images_dir().join(&filename);
+
+        if let Err(e) = image::save_buffer_with_format(
+            &img_path,
+            pixels,
+            image.width as u32,
+            image.height as u32,
+            image::ExtendedColorType::Rgba8,
+            image::ImageFormat::Png,
+        ) {
+            tracing::error!("Failed to encode image as PNG: {e}");
+            return;
+        }
+
+        // 图片 App 黑白名单走 filter::check_app_rules 保持和文本对称
+        let source_app = crate::window::platform::capture_foreground_app_name();
+        let (state, blocked_reason) = {
+            let conn = db.conn();
+            match crate::filter::check_app_rules(&conn, source_app.as_deref()) {
+                Some(decision) if decision.state == "local_only" => {
+                    (Some(decision.state), decision.blocked_reason)
+                }
+                _ => (None, None),
+            }
+        };
+
+        let req = repository::InsertRequest {
+            id,
+            content: Some(img_hash),
+            content_type: "image".to_string(),
+            image_path: Some(filename),
+            file_path: None,
+            source_app,
+            state,
+            blocked_reason,
+            sensitive_type: None,
+            matched_domain_rule: None,
+        };
+
+        let conn = db.conn();
+        match repository::insert_clipboard(&conn, req) {
+            Ok(_) => tracing::debug!("Captured image clipboard entry"),
+            Err(e) => tracing::error!("Failed to insert image clipboard: {e}"),
+        }
+    }
 }
 
 /// 生成简单 UUID（v4 格式，不引 uuid crate）

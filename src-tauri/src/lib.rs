@@ -172,7 +172,7 @@ pub fn run() {
             }
 
             // 4. 启动剪切板捕获循环
-            clipboard::start_capture_loop(Arc::clone(&db), Arc::clone(&capture_state));
+            clipboard::start_capture(Arc::clone(&db), Arc::clone(&capture_state));
 
             // 5. 注册全局状态
             app.manage(AppState {
