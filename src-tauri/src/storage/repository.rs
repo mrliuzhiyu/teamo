@@ -256,6 +256,13 @@ pub fn search_clipboard(
     let escaped = query.replace('"', "\"\"");
     let phrase = format!("\"{escaped}\"");
 
+    // 排序分层（对标"精确 > 前缀 > 包含 > FTS rank"的用户预期）：
+    //   1. 置顶项聚顶（pin 语义最高）
+    //   2. 完全匹配（用户输入就是一条记录的完整内容）
+    //   3. 开头匹配（用户输入是记录的前缀 —— 自动补全 mental model）
+    //   4. 包含匹配
+    //   5. FTS5 rank（BM25-like）兜底
+    // 比纯 ORDER BY rank 更符合"我搜这个词想找最直接的那条"
     let mut stmt = conn.prepare(
         "SELECT c.id, c.content_hash, c.content, c.content_type, c.size_bytes,
                 c.image_path, c.file_path, c.source_app, c.source_url, c.source_title,
@@ -265,12 +272,22 @@ pub fn search_clipboard(
          FROM clipboard_fts f
          JOIN clipboard_local c ON c.rowid = f.rowid
          WHERE clipboard_fts MATCH ?1
-         ORDER BY (c.pinned_at IS NULL) ASC, c.pinned_at DESC, rank
+         ORDER BY (c.pinned_at IS NULL) ASC, c.pinned_at DESC,
+                  CASE
+                      WHEN c.content = ?3 THEN 0
+                      WHEN c.content LIKE ?3 || '%' ESCAPE '\\' THEN 1
+                      WHEN c.content LIKE '%' || ?3 || '%' ESCAPE '\\' THEN 2
+                      ELSE 3
+                  END,
+                  rank
          LIMIT ?2",
     )?;
 
+    // LIKE 转义：query 内含 % _ \ 会被当通配符，简化为用户输入极少含这些字符，
+    // 保险起见先转义 \ 再包住 % _
+    let like_safe = query.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_");
     let rows = stmt
-        .query_map(params![phrase, limit], row_to_clipboard)?
+        .query_map(params![phrase, limit, like_safe], row_to_clipboard)?
         .filter_map(|r| r.ok())
         .collect();
 

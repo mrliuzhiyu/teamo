@@ -7,12 +7,15 @@ interface Props {
   selectedIndex: number;
   query: string;
   loading: boolean;
+  hasMore: boolean;
+  loadingMore: boolean;
   onSelect: (i: number) => void;
   onCopy: (row: ClipboardRow) => void;
   onForget: (row: ClipboardRow, index: number) => void;
   onEnter: (row: ClipboardRow) => void;
   onTogglePin: (row: ClipboardRow) => void;
   onPreview: (row: ClipboardRow) => void;
+  onLoadMore: () => void;
 }
 
 export default function CardList({
@@ -20,19 +23,41 @@ export default function CardList({
   selectedIndex,
   query,
   loading,
+  hasMore,
+  loadingMore,
   onSelect,
   onCopy,
   onForget,
   onEnter,
   onTogglePin,
   onPreview,
+  onLoadMore,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
+  const sentinelRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     const el = containerRef.current?.querySelector<HTMLElement>(`[data-idx="${selectedIndex}"]`);
     el?.scrollIntoView({ block: "nearest" });
   }, [selectedIndex]);
+
+  // IntersectionObserver：sentinel 进视野 → 触发加载下一页。
+  // threshold 0.1 = 刚进就触发，不用等完全可见；root = containerRef 在 panel 内滚动
+  useEffect(() => {
+    const sentinel = sentinelRef.current;
+    const root = containerRef.current;
+    if (!sentinel || !root || !hasMore) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0]?.isIntersecting) {
+          onLoadMore();
+        }
+      },
+      { root, threshold: 0.1 },
+    );
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, [hasMore, onLoadMore]);
 
   if (loading) {
     return <div className="flex-1 flex items-center justify-center text-sm text-stone-400">加载中...</div>;
@@ -63,6 +88,12 @@ export default function CardList({
           />
         </div>
       ))}
+      {/* 分页 sentinel：进入视野自动加载下一页。hasMore=false 则不渲染（到底了） */}
+      {hasMore && (
+        <div ref={sentinelRef} className="h-6 flex items-center justify-center text-[11px] text-stone-400">
+          {loadingMore ? "加载中…" : "滚动加载更多"}
+        </div>
+      )}
     </div>
   );
 }

@@ -14,6 +14,7 @@ import PanelSettings from "./PanelSettings";
 import WelcomeBanner from "./WelcomeBanner";
 import PreviewOverlay from "./PreviewOverlay";
 import { enterHintLabel } from "../lib/platform";
+import { useToast } from "../lib/toast";
 
 type View = "list" | "settings";
 
@@ -22,6 +23,7 @@ export default function PanelApp() {
   const [previewRow, setPreviewRow] = useState<ClipboardRow | null>(null);
   const panel = usePanel();
   const searchRef = useRef<HTMLInputElement>(null);
+  const toast = useToast();
 
   // 监听后端 "panel:open-settings" 事件（tray 右键设置 / 首次启动如需要）
   useEffect(() => {
@@ -65,22 +67,29 @@ export default function PanelApp() {
     }
   }, []);
 
-  // 粘贴某条：复制 + 关面板 + 系统 Ctrl+V（Windows），失败则用户手动粘贴
+  // 粘贴某条：复制 + 系统 Ctrl+V + 关面板。粘贴失败时 toast 提示用户手动粘贴。
   // 关键：若 copyToClipboard 返回 false（图片/文件/空/写入失败），
   // 不能 invoke paste_to_previous — 否则 Ctrl+V 会粘贴用户上一次手动复制的内容，
   // 不符合用户选中此条的意图。
   const pasteRow = useCallback(
     async (row: ClipboardRow) => {
       const copied = await copyToClipboard(row);
-      await hidePanel();
-      if (!copied) return;
+      if (!copied) {
+        toast("error", "复制到剪贴板失败");
+        return;
+      }
       try {
         await invoke("paste_to_previous");
+        await hidePanel();
       } catch (e) {
-        console.debug("paste_to_previous unavailable:", e);
+        // 粘贴链路失败（SetForegroundWindow 失败 / 目标窗口不可达等）：
+        // 剪贴板内容已写好，toast 告诉用户手动 Ctrl+V 即可；panel 不 hide，
+        // 让用户看得到 toast，自己 Esc 关
+        console.warn("paste_to_previous failed:", e);
+        toast("error", "目标窗口无法激活 — 内容已在剪贴板，请手动 Ctrl+V");
       }
     },
-    [copyToClipboard, hidePanel],
+    [copyToClipboard, hidePanel, toast],
   );
 
   // Enter / 双击 都走 pasteRow
@@ -208,12 +217,15 @@ export default function PanelApp() {
         selectedIndex={panel.selectedIndex}
         query={panel.query}
         loading={panel.loading}
+        hasMore={panel.hasMore}
+        loadingMore={panel.loadingMore}
         onSelect={panel.setSelectedIndex}
         onCopy={handleCopy}
         onForget={handleForget}
         onEnter={(r) => void pasteRow(r)}
         onTogglePin={(r) => void panel.togglePin(r)}
         onPreview={(r) => setPreviewRow(r)}
+        onLoadMore={() => void panel.loadMore()}
       />
       <div className="px-3 py-1 text-[10px] text-stone-400 bg-stone-50 border-t border-stone-200 flex items-center gap-2">
         <kbd className="px-1 py-0.5 bg-white border border-stone-200 rounded text-[9px]">↑↓</kbd>

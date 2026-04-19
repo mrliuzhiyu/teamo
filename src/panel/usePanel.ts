@@ -24,6 +24,10 @@ export interface PanelState {
   error: string | null;
   isPaused: boolean;
   pendingForget: PendingForget | null;
+  /// 是否还有更多历史可加载（当前 list.length < DB 总量）
+  hasMore: boolean;
+  /// 正在加载下一页（防重入）
+  loadingMore: boolean;
   setQuery: (q: string) => void;
   setSelectedIndex: (i: number) => void;
   refresh: () => Promise<void>;
@@ -32,6 +36,8 @@ export interface PanelState {
   pauseCapture: (minutes: number | null) => Promise<void>;
   resumeCapture: () => Promise<void>;
   togglePin: (row: ClipboardRow) => Promise<void>;
+  /// 加载下一页历史（搜索模式下 no-op）
+  loadMore: () => Promise<void>;
 }
 
 export function usePanel(): PanelState {
@@ -44,6 +50,8 @@ export function usePanel(): PanelState {
   const [error, setError] = useState<string | null>(null);
   const [isPaused, setIsPaused] = useState(false);
   const [pendingForget, setPendingForget] = useState<PendingForget | null>(null);
+  const [hasMore, setHasMore] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
 
   const debounceTimer = useRef<number | null>(null);
   const pendingRef = useRef<PendingForget | null>(null);
@@ -60,6 +68,8 @@ export function usePanel(): PanelState {
         offset: 0,
       });
       setList(rows);
+      // 满一页 → 可能还有更多；不满 → 到底了
+      setHasMore(rows.length >= PAGE_SIZE);
     } catch (e) {
       setError(String(e));
     }
@@ -108,12 +118,35 @@ export function usePanel(): PanelState {
       });
       setList(rows);
       setSelectedIndex(0);
+      // 搜索模式下不分页（FTS 结果自然 cap；用户看不到更多结果是符合预期的）
+      setHasMore(false);
     } catch (e) {
       setError(String(e));
     } finally {
       setSearching(false);
     }
   }, [loadRecent]);
+
+  const loadMore = useCallback(async () => {
+    if (loadingMore || !hasMore || query.trim()) return;
+    setLoadingMore(true);
+    try {
+      const next = await invoke<ClipboardRow[]>("list_recent_clipboard", {
+        limit: PAGE_SIZE,
+        offset: list.length,
+      });
+      if (next.length === 0) {
+        setHasMore(false);
+        return;
+      }
+      setList((prev) => [...prev, ...next]);
+      if (next.length < PAGE_SIZE) setHasMore(false);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setLoadingMore(false);
+    }
+  }, [loadingMore, hasMore, query, list.length]);
 
   const setQuery = useCallback((q: string) => {
     setQueryState(q);
@@ -266,5 +299,8 @@ export function usePanel(): PanelState {
     pauseCapture,
     resumeCapture,
     togglePin,
+    hasMore,
+    loadingMore,
+    loadMore,
   };
 }
