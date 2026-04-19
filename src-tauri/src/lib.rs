@@ -43,6 +43,18 @@ pub fn run() {
                     let _ = window.hide();
                 }
             }
+
+            // panel 失焦自动收起（对标 Raycast / Alfred / Windows 开始菜单）：
+            // 用户点其他 App 时 panel 不应该继续挡在前面。
+            // 同 webview 内部的 React portal(ConfirmDialog / PreviewOverlay) 不会触发
+            // Focused(false)，所以这些交互不受影响。
+            // 已知取舍：如果日后设置里调用系统原生 dialog(plugin_dialog 的 save/open)
+            // 会触发失焦 → panel 被 hide；届时在调用前后加 skip flag 处理。
+            if let tauri::WindowEvent::Focused(false) = event {
+                if window.label() == window::panel::PANEL_LABEL {
+                    let _ = window.hide();
+                }
+            }
         })
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_store::Builder::default().build())
