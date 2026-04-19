@@ -12,12 +12,14 @@ import ActionBar from "./ActionBar";
 import UndoToast from "./UndoToast";
 import PanelSettings from "./PanelSettings";
 import WelcomeBanner from "./WelcomeBanner";
+import PreviewOverlay from "./PreviewOverlay";
 import { enterHintLabel } from "../lib/platform";
 
 type View = "list" | "settings";
 
 export default function PanelApp() {
   const [view, setView] = useState<View>("list");
+  const [previewRow, setPreviewRow] = useState<ClipboardRow | null>(null);
   const panel = usePanel();
   const searchRef = useRef<HTMLInputElement>(null);
 
@@ -115,8 +117,30 @@ export default function PanelApp() {
     }
 
     const onKey = (e: KeyboardEvent) => {
-      // 有 modal dialog 开着时不拦快捷键（Esc 让 dialog 自己处理）
+      // 有 modal dialog 开着时不拦快捷键（Esc / Space 让 dialog 自己处理）
       if (document.querySelector('[data-teamo-dialog="open"]')) return;
+
+      // Ctrl/Cmd + 1..9：直接粘贴对应 index 的项（对标 Maccy ⌘1-9 / Ditto）
+      if ((e.ctrlKey || e.metaKey) && /^[1-9]$/.test(e.key)) {
+        const idx = parseInt(e.key, 10) - 1;
+        const target = panel.list[idx];
+        if (target) {
+          e.preventDefault();
+          void pasteRow(target);
+        }
+        return;
+      }
+
+      // F3 或 Space（仅当搜索框为空）→ 打开预览浮层（对标 Ditto F3 / CopyQ F7）
+      if (e.key === "F3" || (e.key === " " && panel.query === "")) {
+        const row = panel.list[panel.selectedIndex];
+        if (row) {
+          e.preventDefault();
+          setPreviewRow(row);
+        }
+        return;
+      }
+
       if (e.key === "Escape") {
         e.preventDefault();
         void hidePanel();
@@ -195,16 +219,18 @@ export default function PanelApp() {
         onCopy={handleCopy}
         onForget={handleForget}
         onEnter={(r) => void pasteRow(r)}
+        onTogglePin={(r) => void panel.togglePin(r)}
+        onPreview={(r) => setPreviewRow(r)}
       />
-      <div className="px-3 py-1 text-[10px] text-stone-400 bg-stone-50 border-t border-stone-200 flex items-center gap-2">
-        <kbd className="px-1 py-0.5 bg-white border border-stone-200 rounded text-[9px]">↑↓</kbd>
-        <span>选择</span>
+      <div className="px-3 py-1 text-[10px] text-stone-400 bg-stone-50 border-t border-stone-200 flex items-center gap-1.5 flex-wrap">
+        <kbd className="px-1 py-0.5 bg-white border border-stone-200 rounded text-[9px]">Ctrl+1-9</kbd>
+        <span>快选</span>
         <kbd className="px-1 py-0.5 bg-white border border-stone-200 rounded text-[9px]">Enter</kbd>
         <span>{enterHintLabel}</span>
+        <kbd className="px-1 py-0.5 bg-white border border-stone-200 rounded text-[9px]">Space</kbd>
+        <span>预览</span>
         <kbd className="px-1 py-0.5 bg-white border border-stone-200 rounded text-[9px]">Del</kbd>
         <span>忘记</span>
-        <kbd className="px-1 py-0.5 bg-white border border-stone-200 rounded text-[9px]">Esc</kbd>
-        <span>关闭</span>
         {panel.error && <span className="ml-auto text-red-500 truncate">{panel.error}</span>}
       </div>
       <ActionBar
@@ -221,6 +247,9 @@ export default function PanelApp() {
           onUndo={panel.undoForget}
           durationMs={UNDO_WINDOW_MS}
         />
+      )}
+      {previewRow && (
+        <PreviewOverlay row={previewRow} onClose={() => setPreviewRow(null)} />
       )}
     </div>
   );

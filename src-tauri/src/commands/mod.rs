@@ -185,6 +185,19 @@ pub async fn paste_to_previous(state: State<'_, AppState>) -> Result<(), String>
     }
 }
 
+// ── 置顶 / 取消置顶 ──
+
+/// 切换置顶状态。返回新的 pinned_at（null = 已取消；数字 = 置顶时间戳 ms）。
+/// 面板列表会自动按 pinned_at DESC 排序把置顶项聚集到顶部。
+#[tauri::command]
+pub fn toggle_pin(
+    state: State<'_, AppState>,
+    id: String,
+) -> Result<Option<i64>, String> {
+    let conn = state.db.conn();
+    repository::toggle_pin(&conn, &id).map_err(|e| e.to_string())
+}
+
 // ── 忘记 ──
 
 #[tauri::command]

@@ -31,6 +31,7 @@ export interface PanelState {
   undoForget: () => void;
   pauseCapture: (minutes: number | null) => Promise<void>;
   resumeCapture: () => Promise<void>;
+  togglePin: (row: ClipboardRow) => Promise<void>;
 }
 
 export function usePanel(): PanelState {
@@ -170,6 +171,22 @@ export function usePanel(): PanelState {
     setPendingForget(null);
   }, []);
 
+  const togglePin = useCallback(
+    async (row: ClipboardRow) => {
+      try {
+        const newPinnedAt = await invoke<number | null>("toggle_pin", { id: row.id });
+        // 乐观更新本地 list；立刻 reload 让 ORDER BY pinned_at 生效把置顶项排到顶部
+        setList((prev) =>
+          prev.map((r) => (r.id === row.id ? { ...r, pinned_at: newPinnedAt } : r)),
+        );
+        await loadRecent();
+      } catch (e) {
+        setError(String(e));
+      }
+    },
+    [loadRecent],
+  );
+
   const pauseCapture = useCallback(async (minutes: number | null) => {
     try {
       await invoke("pause_capture", { minutes });
@@ -248,5 +265,6 @@ export function usePanel(): PanelState {
     undoForget,
     pauseCapture,
     resumeCapture,
+    togglePin,
   };
 }

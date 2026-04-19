@@ -8,10 +8,14 @@ interface Props {
   row: ClipboardRow;
   selected: boolean;
   query: string;
+  /// 列表 index（0-based）。前 9 条显示数字徽章，对应 Ctrl+1..9 快选
+  index: number;
   onMouseEnter: () => void;
   onCopy: (row: ClipboardRow) => void;
   onForget: (row: ClipboardRow) => void;
   onEnter: (row: ClipboardRow) => void;
+  onTogglePin: (row: ClipboardRow) => void;
+  onPreview: (row: ClipboardRow) => void;
 }
 
 const badgeClass: Record<string, string> = {
@@ -24,12 +28,17 @@ export default function CardItem({
   row,
   selected,
   query,
+  index,
   onMouseEnter,
   onCopy,
   onForget,
   onEnter,
+  onTogglePin,
+  onPreview,
 }: Props) {
   const isImage = row.content_type === "image" && row.image_path;
+  const isPinned = row.pinned_at !== null && row.pinned_at !== undefined;
+  const showNumberBadge = index < 9;
   const badge = getStateBadge(row);
   const preview = formatPreview(row);
   const parts = row.sensitive_type ? [{ text: preview, hit: false }] : highlightMatches(preview, query);
@@ -93,10 +102,31 @@ export default function CardItem({
       className={`relative px-3 py-2.5 rounded-lg border cursor-pointer transition-all group ${
         selected
           ? "bg-stone-50 border-stone-300 shadow-sm"
-          : "bg-white border-stone-200 hover:bg-stone-50/60 hover:border-stone-300"
+          : isPinned
+            ? "bg-amber-50/30 border-amber-200/60 hover:bg-amber-50/50"
+            : "bg-white border-stone-200 hover:bg-stone-50/60 hover:border-stone-300"
       }`}
-      title="双击粘贴 · 右键更多操作"
+      title="双击粘贴 · Space 预览 · 右键更多操作"
     >
+      {/* 左上：置顶图标（pin 项）或数字徽章（前 9 条） */}
+      {isPinned ? (
+        <span
+          className="absolute left-1 top-1 text-amber-600 flex-shrink-0"
+          title="已置顶"
+          aria-label="已置顶"
+        >
+          <svg width="10" height="10" viewBox="0 0 10 10" fill="currentColor">
+            <path d="M5 0.5L6 3L8.5 3.5L6.7 5.3L7.2 8L5 6.7L2.8 8L3.3 5.3L1.5 3.5L4 3L5 0.5Z" />
+          </svg>
+        </span>
+      ) : showNumberBadge ? (
+        <span
+          className="absolute left-1 top-1 text-[8px] text-stone-400 bg-stone-100 rounded-sm px-1 leading-[1.4] select-none"
+          title={`Ctrl+${index + 1} 快速粘贴`}
+        >
+          {index + 1}
+        </span>
+      ) : null}
       {isImage ? (
         <div className="flex items-start gap-3 pr-24">
           <div className="flex-shrink-0 w-16 h-16 rounded border border-stone-200 bg-stone-100 overflow-hidden flex items-center justify-center">
@@ -160,7 +190,7 @@ export default function CardItem({
         createPortal(
           <div
             ref={menuRef}
-            className="fixed z-50 min-w-[140px] bg-white border border-stone-200 rounded-md shadow-lg py-1 text-[12px]"
+            className="fixed z-50 min-w-[160px] bg-white border border-stone-200 rounded-md shadow-lg py-1 text-[12px]"
             style={{ left: menu.x, top: menu.y }}
           >
             <button
@@ -174,6 +204,19 @@ export default function CardItem({
               className="w-full text-left px-3 py-1.5 hover:bg-stone-100 text-stone-700"
             >
               仅复制到剪切板
+            </button>
+            <button
+              onClick={closeMenuAnd(() => onPreview(row))}
+              className="w-full text-left px-3 py-1.5 hover:bg-stone-100 text-stone-700"
+            >
+              查看全文 <span className="text-stone-400 text-[10px] ml-1">Space</span>
+            </button>
+            <div className="my-1 border-t border-stone-100" />
+            <button
+              onClick={closeMenuAnd(() => onTogglePin(row))}
+              className="w-full text-left px-3 py-1.5 hover:bg-stone-100 text-stone-700"
+            >
+              {isPinned ? "取消置顶" : "置顶到最前"}
             </button>
             <div className="my-1 border-t border-stone-100" />
             <button

@@ -33,6 +33,8 @@ pub struct ClipboardRow {
     /// URL 命中的 domain_rule（"parse_as_content:v.douyin.com/*" 等）。
     /// M3 云端 parse_worker 消费字段；v0.1 前端可选显示 "识别为 X 类型"
     pub matched_domain_rule: Option<String>,
+    /// 置顶时间戳（Unix ms），NULL = 未置顶。列表按 pinned_at DESC 排序让 pin 项聚顶
+    pub pinned_at: Option<i64>,
 }
 
 /// 插入请求
@@ -256,11 +258,11 @@ pub fn search_clipboard(
                 c.image_path, c.file_path, c.source_app, c.source_url, c.source_title,
                 c.captured_at, c.sensitive_type, c.blocked_reason, c.state,
                 c.server_id, c.occurrence_count, c.last_seen_at,
-                c.created_at, c.updated_at, c.matched_domain_rule
+                c.created_at, c.updated_at, c.matched_domain_rule, c.pinned_at
          FROM clipboard_fts f
          JOIN clipboard_local c ON c.rowid = f.rowid
          WHERE clipboard_fts MATCH ?1
-         ORDER BY rank
+         ORDER BY (c.pinned_at IS NULL) ASC, c.pinned_at DESC, rank
          LIMIT ?2",
     )?;
 
@@ -283,9 +285,9 @@ pub fn list_recent(
                 image_path, file_path, source_app, source_url, source_title,
                 captured_at, sensitive_type, blocked_reason, state,
                 server_id, occurrence_count, last_seen_at,
-                created_at, updated_at, matched_domain_rule
+                created_at, updated_at, matched_domain_rule, pinned_at
          FROM clipboard_local
-         ORDER BY captured_at DESC
+         ORDER BY (pinned_at IS NULL) ASC, pinned_at DESC, captured_at DESC
          LIMIT ?1 OFFSET ?2",
     )?;
 
@@ -304,7 +306,7 @@ pub fn get_detail(conn: &Connection, id: &str) -> Result<Option<ClipboardRow>, r
                 image_path, file_path, source_app, source_url, source_title,
                 captured_at, sensitive_type, blocked_reason, state,
                 server_id, occurrence_count, last_seen_at,
-                created_at, updated_at, matched_domain_rule
+                created_at, updated_at, matched_domain_rule, pinned_at
          FROM clipboard_local
          WHERE id = ?1",
         params![id],
@@ -316,6 +318,28 @@ pub fn get_detail(conn: &Connection, id: &str) -> Result<Option<ClipboardRow>, r
         Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
         Err(e) => Err(e),
     }
+}
+
+/// 切换置顶状态：当前未 pin → pin (now)；当前 pin → 取消 pin (NULL)。
+/// 返回新的 pinned_at（None = 已取消置顶；Some(ts) = 已置顶于 ts）
+pub fn toggle_pin(conn: &Connection, id: &str) -> Result<Option<i64>, rusqlite::Error> {
+    let current: Option<i64> = conn
+        .query_row(
+            "SELECT pinned_at FROM clipboard_local WHERE id = ?1",
+            params![id],
+            |row| row.get(0),
+        )
+        .ok()
+        .flatten();
+
+    let new_value: Option<i64> = if current.is_some() { None } else { Some(now_ms()) };
+
+    conn.execute(
+        "UPDATE clipboard_local SET pinned_at = ?1 WHERE id = ?2",
+        params![new_value, id],
+    )?;
+
+    Ok(new_value)
 }
 
 /// 忘记一条记录（删除行 + 关联图片文件）
@@ -597,6 +621,7 @@ fn row_to_clipboard(row: &rusqlite::Row<'_>) -> Result<ClipboardRow, rusqlite::E
         created_at: row.get(17)?,
         updated_at: row.get(18)?,
         matched_domain_rule: row.get(19)?,
+        pinned_at: row.get(20)?,
     })
 }
 

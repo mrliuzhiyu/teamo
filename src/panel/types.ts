@@ -20,6 +20,8 @@ export interface ClipboardRow {
   updated_at: number;
   /// URL 命中的 domain_rule（"parse_as_content:v.douyin.com/*" 等，可选显示）
   matched_domain_rule: string | null;
+  /// 置顶时间戳（Unix ms），null = 未置顶。pin 项聚集在列表顶部
+  pinned_at: number | null;
 }
 
 export interface TodayStats {

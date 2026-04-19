@@ -11,6 +11,8 @@ interface Props {
   onCopy: (row: ClipboardRow) => void;
   onForget: (row: ClipboardRow, index: number) => void;
   onEnter: (row: ClipboardRow) => void;
+  onTogglePin: (row: ClipboardRow) => void;
+  onPreview: (row: ClipboardRow) => void;
 }
 
 export default function CardList({
@@ -22,6 +24,8 @@ export default function CardList({
   onCopy,
   onForget,
   onEnter,
+  onTogglePin,
+  onPreview,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -50,10 +54,13 @@ export default function CardList({
             row={row}
             selected={i === selectedIndex}
             query={query}
+            index={i}
             onMouseEnter={() => onSelect(i)}
             onCopy={onCopy}
             onForget={(r) => onForget(r, i)}
             onEnter={onEnter}
+            onTogglePin={onTogglePin}
+            onPreview={onPreview}
           />
         </div>
       ))}
