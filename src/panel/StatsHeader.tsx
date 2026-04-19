@@ -17,9 +17,7 @@ export default function StatsHeader({ stats, onClose }: Props) {
         拦截 <strong className="text-stone-800">{fmt(stats?.blocked)}</strong>
       </span>
       <span className="text-stone-300">·</span>
-      <span>
-        上云 <strong className="text-stone-800">--</strong>
-      </span>
+      <span className="text-stone-400">离线</span>
       <button
         onClick={onClose}
         className="ml-auto w-6 h-6 flex items-center justify-center rounded hover:bg-stone-100 text-stone-400 hover:text-stone-700 transition-colors"

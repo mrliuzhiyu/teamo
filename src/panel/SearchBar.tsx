@@ -23,17 +23,21 @@ const SearchBar = forwardRef<HTMLInputElement, Props>(function SearchBar(
         spellCheck={false}
       />
       {searching && (
-        <span className="absolute right-5 top-1/2 -translate-y-1/2 text-[10px] text-stone-400">
-          搜索中...
+        <span className="absolute right-6 top-1/2 -translate-y-1/2 text-[10px] text-stone-400">
+          搜索中…
         </span>
       )}
       {value && !searching && (
         <button
           onClick={() => onChange("")}
-          className="absolute right-5 top-1/2 -translate-y-1/2 text-xs text-stone-400 hover:text-stone-600"
+          className="absolute right-5 top-1/2 -translate-y-1/2 w-4 h-4 rounded-full bg-stone-300 hover:bg-stone-400 text-white flex items-center justify-center"
           tabIndex={-1}
+          title="清除搜索"
+          aria-label="清除"
         >
-          清除
+          <svg width="8" height="8" viewBox="0 0 8 8" fill="none">
+            <path d="M1.5 1.5L6.5 6.5M6.5 1.5L1.5 6.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+          </svg>
         </button>
       )}
     </div>
