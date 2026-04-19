@@ -199,16 +199,22 @@ pub fn activate_and_paste(handle: Option<ForegroundHandle>) -> Result<(), String
                 use winapi::um::winuser::SetForegroundWindow;
                 let ok = SetForegroundWindow(h.hwnd as HWND);
                 if ok == 0 {
-                    // 失败不阻塞，继续尝试模拟 Ctrl+V（贴到当前前景也聊胜于无）
+                    // 失败必须 return Err：如果继续模拟 Ctrl+V，热键会打到当前
+                    // 前景窗口（可能是 Teamo 自己、或刚才 panel hide 后的任意窗口），
+                    // 把剪贴板粘贴到用户根本不期望的地方。让前端降级为"只复制不粘贴"。
+                    // 用户已经拿到剪贴板内容，手动 Ctrl+V 即可。
                     tracing::warn!(
-                        "SetForegroundWindow failed for hwnd={:#x}; target may be gone",
+                        "SetForegroundWindow failed for hwnd={:#x}; target minimized/gone. \
+                         Content is in clipboard, user can Ctrl+V manually.",
                         h.hwnd
                     );
+                    return Err("SetForegroundWindow failed; target window unavailable".into());
                 }
             }
             sleep(Duration::from_millis(30));
         } else {
             tracing::debug!("activate_and_paste: no prev handle, skipping SetForegroundWindow");
+            return Err("no foreground handle captured".into());
         }
 
         use enigo::{Direction, Enigo, Key, Keyboard, Settings};

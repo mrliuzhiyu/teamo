@@ -20,6 +20,9 @@ use std::time::{Duration, Instant};
 #[cfg(target_os = "windows")]
 mod windows_listener;
 
+#[cfg(target_os = "windows")]
+mod hidden_formats;
+
 #[cfg(not(target_os = "windows"))]
 compile_error!(
     "Teamo v0.2 只支持 Windows（事件驱动剪贴板监听）。macOS Phase 4 用 NSPasteboard KVO 补齐。"
@@ -189,23 +192,30 @@ fn ingest_once(
     clipboard: &mut arboard::Clipboard,
     last_hash: &mut Option<String>,
 ) {
-    // 读文本
-    if let Ok(text) = clipboard.get_text() {
-        if text.is_empty() {
-            return;
-        }
-        let text_hash = format!("{:x}", {
-            use std::collections::hash_map::DefaultHasher;
-            use std::hash::{Hash, Hasher};
-            let mut h = DefaultHasher::new();
-            text.hash(&mut h);
-            h.finish()
-        });
+    // OS 级"请忽略我"检查 —— 密码管理器 / 银行 App 设置的官方 MIME 标记
+    // （Clipboard Viewer Ignore / ExcludeClipboardContentFromMonitorProcessing 等）。
+    // 对标 CopyQ isHidden()；Windows 原生 Clipboard History 也按此语义过滤。
+    // 这道比 filter-engine 的 sensitive 正则更权威（密码管理器自己声明"别记我"）。
+    if hidden_formats::is_clipboard_hidden() {
+        tracing::debug!("Clipboard content marked as hidden by source app — skipping");
+        return;
+    }
 
-        if last_hash.as_deref() == Some(&text_hash) {
-            return; // 没变化
-        }
-        *last_hash = Some(text_hash);
+    // 读文本（非空才处理；空文本可能是"截图附带空 CF_UNICODETEXT" 的情况，需 fall-through 到图片分支）
+    if let Ok(text) = clipboard.get_text() {
+        if !text.is_empty() {
+            let text_hash = format!("{:x}", {
+                use std::collections::hash_map::DefaultHasher;
+                use std::hash::{Hash, Hasher};
+                let mut h = DefaultHasher::new();
+                text.hash(&mut h);
+                h.finish()
+            });
+
+            if last_hash.as_deref() == Some(&text_hash) {
+                return; // 没变化
+            }
+            *last_hash = Some(text_hash);
 
         // 抓当前前景 App（Windows 实现；macOS/Linux Phase 4）
         let source_app = crate::window::platform::capture_foreground_app_name();
@@ -229,19 +239,21 @@ fn ingest_once(
             matched_domain_rule: decision.matched_domain_rule,
         };
 
-        let conn = db.conn();
-        match repository::insert_clipboard(&conn, req) {
-            Ok(repository::InsertResult::Inserted) => {
-                tracing::debug!("Captured new text clipboard entry");
+            let conn = db.conn();
+            match repository::insert_clipboard(&conn, req) {
+                Ok(repository::InsertResult::Inserted) => {
+                    tracing::debug!("Captured new text clipboard entry");
+                }
+                Ok(repository::InsertResult::Deduplicated { existing_id }) => {
+                    tracing::debug!("Deduplicated with {existing_id}");
+                }
+                Err(e) => {
+                    tracing::error!("Failed to insert clipboard: {e}");
+                }
             }
-            Ok(repository::InsertResult::Deduplicated { existing_id }) => {
-                tracing::debug!("Deduplicated with {existing_id}");
-            }
-            Err(e) => {
-                tracing::error!("Failed to insert clipboard: {e}");
-            }
+            return;
         }
-        return;
+        // 空文本落下去尝试图片（修复 bug：截图 App 同时放空 CF_UNICODETEXT + CF_BITMAP 时原来图片丢失）
     }
 
     // 读图片
