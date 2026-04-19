@@ -42,6 +42,10 @@ pub struct ClipboardRow {
     pub image_width: Option<i64>,
     /// 图片高度（px）— content_type='image' 时在 ingest 填充，非图片为 NULL
     pub image_height: Option<i64>,
+    /// L1 session 归属（由 resolve_session_id 分配）
+    pub session_id: Option<String>,
+    /// L1 字符串子集：小片段归属大文本的 row.id（R1 schema 预留，算法 R1+ 补）
+    pub parent_id: Option<String>,
 }
 
 /// 插入请求
@@ -65,6 +69,10 @@ pub struct InsertRequest {
     /// 图片宽高（仅 content_type='image' 有值）
     pub image_width: Option<i64>,
     pub image_height: Option<i64>,
+    /// L1 规则分组：同 source_app + 5 分钟窗口 = 同 session。聚合 tab 按此折叠
+    pub session_id: Option<String>,
+    /// L1 字符串子集：小片段归属大文本的 row.id（R1 暂未启用算法，schema 预留）
+    pub parent_id: Option<String>,
 }
 
 /// 插入结果
@@ -227,8 +235,8 @@ pub fn insert_clipboard(conn: &Connection, req: InsertRequest) -> Result<InsertR
         "INSERT INTO clipboard_local
          (id, content_hash, content, content_type, size_bytes, image_path, file_path,
           source_app, captured_at, state, blocked_reason, sensitive_type,
-          matched_domain_rule, image_width, image_height, last_seen_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?9)",
+          matched_domain_rule, image_width, image_height, session_id, last_seen_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?9)",
         params![
             req.id,
             content_hash,
@@ -245,6 +253,7 @@ pub fn insert_clipboard(conn: &Connection, req: InsertRequest) -> Result<InsertR
             req.matched_domain_rule,
             req.image_width,
             req.image_height,
+            req.session_id,
         ],
     )?;
 
@@ -278,7 +287,7 @@ pub fn search_clipboard(
                 c.captured_at, c.sensitive_type, c.blocked_reason, c.state,
                 c.server_id, c.occurrence_count, c.last_seen_at,
                 c.created_at, c.updated_at, c.matched_domain_rule, c.pinned_at, c.last_used_at,
-                c.image_width, c.image_height
+                c.image_width, c.image_height, c.session_id, c.parent_id
          FROM clipboard_fts f
          JOIN clipboard_local c ON c.rowid = f.rowid
          WHERE clipboard_fts MATCH ?1
@@ -316,7 +325,7 @@ pub fn list_recent(
                 captured_at, sensitive_type, blocked_reason, state,
                 server_id, occurrence_count, last_seen_at,
                 created_at, updated_at, matched_domain_rule, pinned_at, last_used_at,
-                image_width, image_height
+                image_width, image_height, session_id, parent_id
          FROM clipboard_local
          ORDER BY (pinned_at IS NULL) ASC, pinned_at DESC,
                   COALESCE(last_used_at, captured_at) DESC
@@ -339,7 +348,7 @@ pub fn get_detail(conn: &Connection, id: &str) -> Result<Option<ClipboardRow>, r
                 captured_at, sensitive_type, blocked_reason, state,
                 server_id, occurrence_count, last_seen_at,
                 created_at, updated_at, matched_domain_rule, pinned_at, last_used_at,
-                image_width, image_height
+                image_width, image_height, session_id, parent_id
          FROM clipboard_local
          WHERE id = ?1",
         params![id],
@@ -373,6 +382,143 @@ pub fn toggle_pin(conn: &Connection, id: &str) -> Result<Option<i64>, rusqlite::
     )?;
 
     Ok(new_value)
+}
+
+// ── L1 Session 分组 ──
+
+/// Session 分配规则（capture 时同步调用）：
+/// - 查最近一条 WHERE source_app = :current_app ORDER BY captured_at DESC LIMIT 1
+/// - 存在且 (now_ms - captured_at) < 5 分钟 → 复用 session_id
+/// - 否则生成新 UUID4（或类似）
+///
+/// source_app 为 None（elevated 哨兵 / 非 Windows）→ 不走 session 聚合，返 None
+pub fn resolve_session_id(
+    conn: &Connection,
+    source_app: Option<&str>,
+    new_id_fn: impl FnOnce() -> String,
+) -> Option<String> {
+    let app = source_app?;
+    let now = now_ms();
+    const WINDOW_MS: i64 = 5 * 60 * 1000;
+
+    let recent: Option<(String, i64)> = conn
+        .query_row(
+            "SELECT session_id, captured_at FROM clipboard_local
+             WHERE source_app = ?1 AND session_id IS NOT NULL
+             ORDER BY captured_at DESC LIMIT 1",
+            params![app],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),
+        )
+        .ok();
+
+    match recent {
+        Some((sid, captured_at)) if now - captured_at < WINDOW_MS => Some(sid),
+        _ => Some(new_id_fn()),
+    }
+}
+
+/// Session 摘要 — 聚合 tab 展示用
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionSummary {
+    pub session_id: String,
+    /// session 内最新一条的 content 预览（text only 取 100 字；image 显示 "[图片]"）
+    pub first_preview: String,
+    pub primary_source_app: Option<String>,
+    pub started_at: i64,
+    pub ended_at: i64,
+    pub item_count: i64,
+    /// session 里是否有 image / sensitive 类条目（便于 UI 图标提示）
+    pub has_image: bool,
+    pub has_sensitive: bool,
+}
+
+/// 按 session 聚合查询（聚合 tab 主数据源）。按 ended_at DESC 排序。
+pub fn list_sessions(conn: &Connection, limit: i64) -> Result<Vec<SessionSummary>, rusqlite::Error> {
+    let mut stmt = conn.prepare(
+        "SELECT session_id,
+                MIN(captured_at) AS started_at,
+                MAX(captured_at) AS ended_at,
+                COUNT(*) AS item_count,
+                MAX(source_app) AS primary_source_app,
+                MAX(CASE WHEN content_type = 'image' THEN 1 ELSE 0 END) AS has_image,
+                MAX(CASE WHEN sensitive_type IS NOT NULL THEN 1 ELSE 0 END) AS has_sensitive
+         FROM clipboard_local
+         WHERE session_id IS NOT NULL
+         GROUP BY session_id
+         ORDER BY ended_at DESC
+         LIMIT ?1",
+    )?;
+
+    let sessions: Vec<SessionSummary> = stmt
+        .query_map(params![limit], |row| {
+            let session_id: String = row.get(0)?;
+            Ok(SessionSummary {
+                session_id,
+                first_preview: String::new(), // 下面填
+                started_at: row.get(1)?,
+                ended_at: row.get(2)?,
+                item_count: row.get(3)?,
+                primary_source_app: row.get(4)?,
+                has_image: row.get::<_, i64>(5)? != 0,
+                has_sensitive: row.get::<_, i64>(6)? != 0,
+            })
+        })?
+        .filter_map(|r| r.ok())
+        .collect();
+
+    // 补 first_preview：对每个 session 拿最新一条 content 的前 100 字
+    // 效率 OK：session 数通常 < 100，每个一个小 query
+    let mut result = Vec::with_capacity(sessions.len());
+    for mut s in sessions {
+        let preview: Option<(Option<String>, String)> = conn
+            .query_row(
+                "SELECT content, content_type FROM clipboard_local
+                 WHERE session_id = ?1
+                 ORDER BY captured_at DESC LIMIT 1",
+                params![s.session_id],
+                |r| Ok((r.get::<_, Option<String>>(0)?, r.get::<_, String>(1)?)),
+            )
+            .ok();
+        s.first_preview = match preview {
+            Some((Some(c), ct)) if ct != "image" => {
+                let clean = c.replace(['\n', '\r'], " ");
+                let chars: Vec<char> = clean.chars().take(80).collect();
+                let mut p: String = chars.iter().collect();
+                if clean.chars().count() > 80 {
+                    p.push('…');
+                }
+                p
+            }
+            Some((_, ct)) if ct == "image" => "[图片]".to_string(),
+            _ => "[空]".to_string(),
+        };
+        result.push(s);
+    }
+
+    Ok(result)
+}
+
+/// 取某 session 下所有 items（聚合 tab 展开用）
+pub fn list_session_items(
+    conn: &Connection,
+    session_id: &str,
+) -> Result<Vec<ClipboardRow>, rusqlite::Error> {
+    let mut stmt = conn.prepare(
+        "SELECT id, content_hash, content, content_type, size_bytes,
+                image_path, file_path, source_app, source_url, source_title,
+                captured_at, sensitive_type, blocked_reason, state,
+                server_id, occurrence_count, last_seen_at,
+                created_at, updated_at, matched_domain_rule, pinned_at, last_used_at,
+                image_width, image_height, session_id, parent_id
+         FROM clipboard_local
+         WHERE session_id = ?1
+         ORDER BY captured_at DESC",
+    )?;
+    let rows = stmt
+        .query_map(params![session_id], row_to_clipboard)?
+        .filter_map(|r| r.ok())
+        .collect();
+    Ok(rows)
 }
 
 /// 忘记一条记录（删除行 + 关联图片文件）
@@ -658,6 +804,8 @@ fn row_to_clipboard(row: &rusqlite::Row<'_>) -> Result<ClipboardRow, rusqlite::E
         last_used_at: row.get(21)?,
         image_width: row.get(22)?,
         image_height: row.get(23)?,
+        session_id: row.get(24)?,
+        parent_id: row.get(25)?,
     })
 }
 

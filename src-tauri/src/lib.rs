@@ -84,6 +84,8 @@ pub fn run() {
             commands::get_image_data_url,
             commands::export_data,
             commands::import_data,
+            commands::list_sessions,
+            commands::list_session_items,
             commands::get_data_info,
             commands::clear_all_data,
             commands::list_app_rules,

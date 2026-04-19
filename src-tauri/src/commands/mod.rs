@@ -226,6 +226,26 @@ pub fn toggle_pin(
     repository::toggle_pin(&conn, &id).map_err(|e| e.to_string())
 }
 
+// ── L1 聚合 tab 数据源 ──
+
+#[tauri::command]
+pub fn list_sessions(
+    state: State<'_, AppState>,
+    limit: i64,
+) -> Result<Vec<repository::SessionSummary>, String> {
+    let conn = state.db.conn();
+    repository::list_sessions(&conn, limit).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn list_session_items(
+    state: State<'_, AppState>,
+    session_id: String,
+) -> Result<Vec<repository::ClipboardRow>, String> {
+    let conn = state.db.conn();
+    repository::list_session_items(&conn, &session_id).map_err(|e| e.to_string())
+}
+
 // ── 数据导入（从 Teamo 自己的 JSON 导出恢复）──
 
 #[tauri::command]

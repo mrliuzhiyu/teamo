@@ -257,6 +257,11 @@ fn ingest_once(
             crate::filter::apply_filters(&conn, &text, source_app.as_deref())
         };
         let id = generate_id();
+        // L1 session 分配：同 source_app + 5 分钟窗口复用；无 source_app 则 None
+        let session_id = {
+            let conn = db.conn();
+            repository::resolve_session_id(&conn, source_app.as_deref(), generate_id)
+        };
         let req = repository::InsertRequest {
             id,
             content: Some(text),
@@ -270,6 +275,8 @@ fn ingest_once(
             matched_domain_rule: decision.matched_domain_rule,
             image_width: None,
             image_height: None,
+            session_id,
+            parent_id: None,
         };
 
             let conn = db.conn();
@@ -350,6 +357,11 @@ fn ingest_once(
             }
         };
 
+        // L1 session：图片和文本共用同 source_app 分组
+        let session_id = {
+            let conn = db.conn();
+            repository::resolve_session_id(&conn, source_app.as_deref(), generate_id)
+        };
         let req = repository::InsertRequest {
             id,
             content: Some(img_hash),
@@ -363,6 +375,8 @@ fn ingest_once(
             matched_domain_rule: None,
             image_width: Some(image.width as i64),
             image_height: Some(image.height as i64),
+            session_id,
+            parent_id: None,
         };
 
         let conn = db.conn();
